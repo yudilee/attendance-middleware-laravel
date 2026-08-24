@@ -38,10 +38,12 @@ Route::prefix('admin')->middleware(['auth'])->group(function () {
     // System Settings & Release Management
     Route::get('/settings', [\App\Http\Controllers\Admin\AppSettingController::class, 'index'])->name('admin.settings');
     Route::post('/settings', [\App\Http\Controllers\Admin\AppSettingController::class, 'update'])->name('admin.settings.update');
+    Route::post('/settings/adms-auto-sync', [\App\Http\Controllers\Admin\AppSettingController::class, 'toggleAdmsAutoSync'])->name('admin.settings.adms-auto-sync');
 
     // Dashboard & Live Punches
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('admin.dashboard');
     Route::post('/sync-adms', [DashboardController::class, 'syncAdms'])->name('admin.sync-adms');
+    Route::post('/sync-adms-push-names', [DashboardController::class, 'syncAdmsPushNames'])->name('admin.sync-adms-push-names');
 
     // Devices & QR Onboarding
     Route::get('/devices', [DeviceController::class, 'index'])->name('admin.devices');
@@ -52,10 +54,13 @@ Route::prefix('admin')->middleware(['auth'])->group(function () {
 
     // Employees & Shifts
     Route::get('/employees', [EmployeeController::class, 'index'])->name('admin.employees');
+    Route::post('/employees', [EmployeeController::class, 'store'])->name('admin.employees.store');
     Route::get('/employees/search', [EmployeeController::class, 'search'])->name('admin.employees.search');
     Route::get('/employees/{employee}', [EmployeeController::class, 'show'])->name('admin.employees.show');
+    Route::put('/employees/{employee}', [EmployeeController::class, 'update'])->name('admin.employees.update');
     Route::post('/employees/{employee}/shift', [EmployeeController::class, 'updateShift'])->name('admin.employees.shift');
     Route::post('/employees/{employee}/role', [EmployeeController::class, 'updateRole'])->name('admin.employees.role');
+    Route::post('/employees/{employee}/delete-from-adms', [EmployeeController::class, 'deleteFromAdms'])->name('admin.employees.delete-from-adms');
 
     // Leaves & Absence Management
     Route::get('/leaves', [\App\Http\Controllers\Admin\LeaveController::class, 'index'])->name('admin.leaves');

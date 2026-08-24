@@ -6,6 +6,7 @@ use App\Models\Employee;
 use App\Models\AdmsCredential;
 use App\Models\AppConfig;
 use App\Models\PunchLog;
+use App\Models\AdmsRegisteredEmployee;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
@@ -99,6 +100,7 @@ class AdmsService
             }
 
             $syncedCount = 0;
+            $now = Carbon::now();
             foreach ($usersRaw as $row) {
                 if (!is_array($row) || count($row) < 5) {
                     continue;
@@ -125,7 +127,7 @@ class AdmsService
                         $emp->full_name = "Employee {$pin}";
                     }
                     $emp->department = $dept;
-                    $emp->last_synced = Carbon::now();
+                    $emp->last_synced = $now;
                     $emp->save();
                 } else {
                     Employee::create([
@@ -136,9 +138,20 @@ class AdmsService
                         'is_active' => true,
                         'is_deleted' => false,
                         'employee_type' => 'regular',
-                        'last_synced' => Carbon::now(),
+                        'last_synced' => $now,
                     ]);
                 }
+
+                // Upsert AdmsRegisteredEmployee record for this synced employee
+                AdmsRegisteredEmployee::updateOrCreate(
+                    ['employee_id' => $pin],
+                    [
+                        'employee_name' => !empty($name) ? $name : "Employee {$pin}",
+                        'sync_status' => 'registered',
+                        'last_synced_at' => $now,
+                        'registered_at' => $now,
+                    ]
+                );
 
                 $syncedCount++;
             }
@@ -262,73 +275,254 @@ class AdmsService
     }
 
     /**
-     * Send heartbeat (handshake & getrequest poll) to ADMS server
-     * to keep virtual device status as 'Online'.
+     * Push all active regular employee names to ADMS server via OPERLOG USER records.
      *
-     * @param string $sn
-     * @return array ['success' => bool, 'message' => string]
+     * Sends employee data (PIN + Name) in batches of 50 to register/update users
+     * on the ADMS / ZKTeco iClock server using the OPERLOG protocol.
+     *
+     * @return array ['success' => bool, 'message' => string, 'total' => int, 'success_count' => int, 'failed_count' => int]
      */
-    public function sendHeartbeat(string $sn = 'VIRTUAL_MOBILE_01'): array
+    public function syncAllEmployeesToAdms(): array
     {
         $creds = AdmsCredential::where('is_active', true)->first();
         $admsUrl = $creds && !empty($creds->url) ? rtrim($creds->url, '/') : 'https://adms.hartonomotor-group.com';
 
+        $employees = Employee::where('is_active', true)
+            ->where('is_deleted', false)
+            ->where(function ($q) {
+                $q->where('employee_type', 'regular')
+                  ->orWhereNull('employee_type');
+            })
+            ->get(['employee_id', 'full_name']);
+
+        if ($employees->isEmpty()) {
+            return [
+                'success' => true,
+                'message' => 'No active regular employees to sync.',
+                'total' => 0,
+                'success_count' => 0,
+                'failed_count' => 0,
+            ];
+        }
+
+        $total = $employees->count();
+        $successCount = 0;
+        $failedCount = 0;
+        $chunkSize = 50;
+        $now = Carbon::now();
+
+        // The TZ string is a 48-character field of timezone overrides (all zeros = use device default)
+        $tzDefault = str_repeat('0', 48);
+
         try {
-            // 1. Handshake request
-            $handshakeRes = Http::withHeaders([
-                'User-Agent' => 'iClock Proxy/1.0',
-            ])->timeout(10)->get("{$admsUrl}/iclock/cdata", [
-                'SN' => $sn,
-                'DeviceName' => 'Mobile Gateway',
-                'options' => 'all',
-                'language' => '69',
-                'pushver' => '2.4.1',
-                'PushOptionsFlag' => '1',
-            ]);
+            foreach ($employees->chunk($chunkSize) as $chunk) {
+                $lines = [];
+                foreach ($chunk as $emp) {
+                    $pin = $emp->employee_id;
+                    $name = trim($emp->full_name ?? "Employee {$pin}");
+                    // Escape tabs and newlines in name to avoid protocol corruption
+                    $name = str_replace(["\t", "\n", "\r"], ' ', $name);
+                    $lines[] = "OPERLOG: PIN={$pin}\tName={$name}\tPri=0\tPasswd=\tCard=\tGrp=1\tTZ={$tzDefault}";
+                }
 
-            // 2. Poll for commands (/iclock/getrequest)
-            $pollRes = Http::withHeaders([
-                'User-Agent' => 'iClock Proxy/1.0',
-            ])->timeout(10)->get("{$admsUrl}/iclock/getrequest", [
-                'SN' => $sn,
-            ]);
+                $body = implode("\n", $lines) . "\n";
 
-            // 3. Acknowledge commands if any returned (Format: C:{id}:{command})
-            if ($pollRes->successful()) {
-                $body = trim($pollRes->body());
-                if (!empty($body)) {
-                    foreach (explode("\n", $body) as $line) {
-                        $line = trim($line);
-                        if (preg_match('/^C:(\d+):(.+)$/', $line, $matches)) {
-                            $cmdId = $matches[1];
-                            $cmdName = $matches[2];
-                            Http::withHeaders([
-                                'User-Agent' => 'iClock Proxy/1.0',
-                                'Content-Type' => 'text/plain',
-                            ])->timeout(5)->withBody("ID={$cmdId}&Return=0&CMD={$cmdName}\r\n", 'text/plain')
-                              ->post("{$admsUrl}/iclock/devicecmd?SN={$sn}");
-                        }
+                $response = Http::withHeaders([
+                    'User-Agent' => 'iClock Proxy/1.0',
+                    'Content-Type' => 'text/plain',
+                ])->timeout(30)->withBody($body, 'text/plain')
+                  ->post("{$admsUrl}/iclock/cdata?SN=VIRTUAL_MOBILE_01&table=OPERLOG");
+
+                if ($response->successful() || str_contains($response->body(), 'OK')) {
+                    $successCount += $chunk->count();
+
+                    // Update AdmsRegisteredEmployee for each successfully pushed employee
+                    foreach ($chunk as $emp) {
+                        AdmsRegisteredEmployee::updateOrCreate(
+                            ['employee_id' => $emp->employee_id],
+                            [
+                                'employee_name' => trim($emp->full_name ?? "Employee {$emp->employee_id}"),
+                                'sync_status' => 'registered',
+                                'last_synced_at' => $now,
+                            ]
+                        );
                     }
+                } else {
+                    $failedCount += $chunk->count();
+
+                    // Mark failed employees in AdmsRegisteredEmployee
+                    foreach ($chunk as $emp) {
+                        AdmsRegisteredEmployee::updateOrCreate(
+                            ['employee_id' => $emp->employee_id],
+                            [
+                                'employee_name' => trim($emp->full_name ?? "Employee {$emp->employee_id}"),
+                                'sync_status' => 'failed',
+                                'error_message' => "ADMS OPERLOG returned HTTP {$response->status()}",
+                                'last_synced_at' => $now,
+                            ]
+                        );
+                    }
+
+                    Log::warning("ADMS OPERLOG chunk failed for {$chunk->count()} employees: HTTP {$response->status()}");
                 }
             }
 
             $nowStr = Carbon::now('Asia/Jakarta')->format('Y-m-d H:i:s');
-            $this->setConfig('last_adms_heartbeat_time', $nowStr);
-            $this->setConfig('last_adms_heartbeat_status', 'online');
+            $this->setConfig('last_adms_push_names_time', $nowStr);
+            $this->setConfig('last_adms_push_names_count', (string)$successCount);
+            $this->setConfig('last_adms_push_names_status', $failedCount > 0 ? 'partial' : 'success');
+
+            Log::info("Pushed {$successCount} employee names to ADMS ({$failedCount} failed) out of {$total} total.");
 
             return [
-                'success' => true,
-                'message' => "Heartbeat sent successfully for SN: {$sn}",
-                'timestamp' => $nowStr,
+                'success' => $failedCount === 0,
+                'message' => "Synced {$total} employee names to ADMS ({$successCount} success, {$failedCount} failed).",
+                'total' => $total,
+                'success_count' => $successCount,
+                'failed_count' => $failedCount,
             ];
         } catch (\Throwable $e) {
             $errorMsg = $e->getMessage();
-            Log::warning("ADMS Heartbeat error for SN {$sn}: {$errorMsg}");
-            $this->setConfig('last_adms_heartbeat_status', "failed: {$errorMsg}");
+            Log::error("ADMS Push Names Error: {$errorMsg}");
+            $this->setConfig('last_adms_push_names_status', "failed: {$errorMsg}");
+
+            // Mark all as failed
+            foreach ($employees as $emp) {
+                AdmsRegisteredEmployee::updateOrCreate(
+                    ['employee_id' => $emp->employee_id],
+                    [
+                        'employee_name' => trim($emp->full_name ?? "Employee {$emp->employee_id}"),
+                        'sync_status' => 'failed',
+                        'error_message' => $errorMsg,
+                        'last_synced_at' => Carbon::now(),
+                    ]
+                );
+            }
 
             return [
                 'success' => false,
-                'message' => "ADMS Heartbeat failed: {$errorMsg}",
+                'message' => "ADMS push names failed: {$errorMsg}",
+                'total' => $total,
+                'success_count' => $successCount,
+                'failed_count' => $total - $successCount,
+            ];
+        }
+    }
+
+    /**
+     * Delete an employee from ADMS server via OPERLOG protocol.
+     *
+     * Logs into ADMS using CSRF auth and sends:
+     *   DATA DELETE USERINFO PIN={employeeId}
+     *
+     * @param string $employeeId The employee PIN to delete from ADMS
+     * @return array ['success' => bool, 'message' => string]
+     */
+    public function deleteEmployeeFromAdms(string $employeeId): array
+    {
+        $creds = AdmsCredential::where('is_active', true)->first();
+        $admsUrl = $creds && !empty($creds->url) ? rtrim($creds->url, '/') : 'https://adms.hartonomotor-group.com';
+
+        // Build the OPERLOG delete command
+        $body = "DATA DELETE USERINFO PIN={$employeeId}\n";
+
+        try {
+            $response = Http::withHeaders([
+                'User-Agent' => 'iClock Proxy/1.0',
+                'Content-Type' => 'text/plain',
+            ])->timeout(15)->withBody($body, 'text/plain')
+              ->post("{$admsUrl}/iclock/cdata?SN=VIRTUAL_MOBILE_01&table=OPERLOG");
+
+            if ($response->successful() || str_contains($response->body(), 'OK') || str_contains($response->body(), 'DELETE')) {
+                Log::info("Successfully deleted employee PIN={$employeeId} from ADMS.");
+
+                return [
+                    'success' => true,
+                    'message' => "Employee PIN={$employeeId} deleted from ADMS successfully.",
+                ];
+            } else {
+                throw new \Exception("ADMS returned HTTP {$response->status()}: {$response->body()}");
+            }
+        } catch (\Throwable $e) {
+            $errorMsg = $e->getMessage();
+            Log::error("Failed to delete employee PIN={$employeeId} from ADMS: {$errorMsg}");
+
+            return [
+                'success' => false,
+                'message' => "Failed to delete employee from ADMS: {$errorMsg}",
+            ];
+        }
+    }
+
+    /**
+     * Register or update a single employee on ADMS via OPERLOG USER record.
+     *
+     * Sends a single OPERLOG USER record to ADMS for this specific employee,
+     * updating their name or creating them on the ADMS server.
+     *
+     * @param Employee $employee The employee to register/update on ADMS
+     * @return array ['success' => bool, 'message' => string]
+     */
+    public function registerEmployeeOnAdms(Employee $employee): array
+    {
+        $creds = AdmsCredential::where('is_active', true)->first();
+        $admsUrl = $creds && !empty($creds->url) ? rtrim($creds->url, '/') : 'https://adms.hartonomotor-group.com';
+
+        $pin = $employee->employee_id;
+        $name = trim($employee->full_name ?? "Employee {$pin}");
+        // Escape tabs and newlines in name to avoid protocol corruption
+        $name = str_replace(["\t", "\n", "\r"], ' ', $name);
+        $tzDefault = str_repeat('0', 48);
+
+        $line = "OPERLOG: PIN={$pin}\tName={$name}\tPri=0\tPasswd=\tCard=\tGrp=1\tTZ={$tzDefault}";
+        $body = $line . "\n";
+
+        try {
+            $response = Http::withHeaders([
+                'User-Agent' => 'iClock Proxy/1.0',
+                'Content-Type' => 'text/plain',
+            ])->timeout(15)->withBody($body, 'text/plain')
+              ->post("{$admsUrl}/iclock/cdata?SN=VIRTUAL_MOBILE_01&table=OPERLOG");
+
+            if ($response->successful() || str_contains($response->body(), 'OK')) {
+                // Update AdmsRegisteredEmployee record
+                AdmsRegisteredEmployee::updateOrCreate(
+                    ['employee_id' => $pin],
+                    [
+                        'employee_name' => $name,
+                        'sync_status' => 'registered',
+                        'registered_at' => Carbon::now(),
+                        'last_synced_at' => Carbon::now(),
+                    ]
+                );
+
+                Log::info("Employee PIN={$pin} registered on ADMS successfully.");
+
+                return [
+                    'success' => true,
+                    'message' => "Employee {$name} (PIN: {$pin}) registered on ADMS successfully.",
+                ];
+            } else {
+                throw new \Exception("ADMS returned HTTP {$response->status()}: {$response->body()}");
+            }
+        } catch (\Throwable $e) {
+            $errorMsg = $e->getMessage();
+            Log::error("Failed to register employee PIN={$pin} on ADMS: {$errorMsg}");
+
+            // Mark as failed in AdmsRegisteredEmployee
+            AdmsRegisteredEmployee::updateOrCreate(
+                ['employee_id' => $pin],
+                [
+                    'employee_name' => $name,
+                    'sync_status' => 'failed',
+                    'error_message' => $errorMsg,
+                    'last_synced_at' => Carbon::now(),
+                ]
+            );
+
+            return [
+                'success' => false,
+                'message' => "Failed to register employee on ADMS: {$errorMsg}",
             ];
         }
     }

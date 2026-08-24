@@ -14,7 +14,10 @@ import {
     XCircle,
     QrCode,
     Activity,
-    Layers
+    Layers,
+    Trash2,
+    AlertTriangle,
+    Loader2
 } from 'lucide-vue-next';
 import QRCode from 'qrcode';
 import axios from 'axios';
@@ -31,6 +34,26 @@ const props = defineProps({
 const isQrModalOpen = ref(false);
 const qrDataUrl = ref('');
 const generatingQr = ref(false);
+
+const isDeleteModalOpen = ref(false);
+const deletingFromAdms = ref(false);
+
+const confirmDeleteFromAdms = () => {
+    isDeleteModalOpen.value = true;
+};
+
+const executeDeleteFromAdms = async () => {
+    deletingFromAdms.value = true;
+    try {
+        await axios.post(`/admin/employees/${props.employee.id}/delete-from-adms`);
+        router.reload();
+    } catch (e) {
+        alert('Failed to delete employee from ADMS: ' + (e.response?.data?.message || e.message));
+    } finally {
+        deletingFromAdms.value = false;
+        isDeleteModalOpen.value = false;
+    }
+};
 
 const changeShift = (shiftId) => {
     router.post(`/admin/employees/${props.employee.id}/shift`, {
@@ -95,13 +118,22 @@ const openQrModal = async () => {
                 </div>
             </div>
 
-            <button
-                @click="openQrModal"
-                class="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-lg shadow-blue-600/20 transition"
-            >
-                <QrCode class="w-4 h-4" />
-                Generate Onboarding QR
-            </button>
+            <div class="flex items-center gap-2">
+                <button
+                    @click="confirmDeleteFromAdms"
+                    class="flex items-center gap-2 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/20 transition"
+                >
+                    <Trash2 class="w-4 h-4" />
+                    Delete from ADMS
+                </button>
+                <button
+                    @click="openQrModal"
+                    class="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-lg shadow-blue-600/20 transition"
+                >
+                    <QrCode class="w-4 h-4" />
+                    Generate Onboarding QR
+                </button>
+            </div>
         </div>
 
         <!-- 3-Column Profile Cards -->
@@ -288,6 +320,50 @@ const openQrModal = async () => {
                         class="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
                     >
                         Done
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Delete from ADMS Confirmation Modal -->
+        <div v-if="isDeleteModalOpen" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
+                <button @click="isDeleteModalOpen = false" class="absolute top-4 right-4 text-slate-400 hover:text-white">
+                    ✕
+                </button>
+
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="p-2.5 rounded-xl bg-rose-500/10">
+                        <AlertTriangle class="w-5 h-5 text-rose-400" />
+                    </div>
+                    <div>
+                        <h3 class="text-base font-bold text-white">Delete from ADMS</h3>
+                        <p class="text-xs text-slate-400">This action cannot be undone.</p>
+                    </div>
+                </div>
+
+                <p class="text-sm text-slate-300 mb-6">
+                    Are you sure you want to delete <strong class="text-white">{{ employee.full_name }}</strong>
+                    (PIN: {{ employee.employee_id }}) from the ADMS server? This will remove the user from the
+                    fingerprint/face recognition device registry.
+                </p>
+
+                <div class="flex items-center gap-3 justify-end">
+                    <button
+                        @click="isDeleteModalOpen = false"
+                        class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
+                        :disabled="deletingFromAdms"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        @click="executeDeleteFromAdms"
+                        class="flex items-center gap-2 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition disabled:opacity-50"
+                        :disabled="deletingFromAdms"
+                    >
+                        <Loader2 v-if="deletingFromAdms" class="w-4 h-4 animate-spin" />
+                        <Trash2 v-else class="w-4 h-4" />
+                        {{ deletingFromAdms ? 'Deleting...' : 'Yes, Delete from ADMS' }}
                     </button>
                 </div>
             </div>

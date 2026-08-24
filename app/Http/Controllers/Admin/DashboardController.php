@@ -115,6 +115,7 @@ class DashboardController extends Controller
 
         $lastSyncTime = AppConfig::where('key', 'last_adms_sync_time')->value('value');
         $lastSyncStatus = AppConfig::where('key', 'last_adms_sync_status')->value('value');
+        $autoSyncEnabled = AppConfig::where('key', 'adms_auto_sync_enabled')->value('value');
 
         return Inertia::render('Admin/Dashboard', [
             'stats' => [
@@ -130,6 +131,7 @@ class DashboardController extends Controller
                 'late_threshold_time' => substr($lateThreshold, 0, 5),
                 'last_sync_time' => $lastSyncTime ?? 'Never',
                 'last_sync_status' => $lastSyncStatus ?? 'idle',
+                'auto_sync_enabled' => $autoSyncEnabled === 'true',
             ],
             'charts' => [
                 'trend_dates' => $trendDates,
@@ -153,5 +155,17 @@ class DashboardController extends Controller
         $messages[] = $empResult['message'];
 
         return back()->with('success', implode(' | ', $messages));
+    }
+
+    public function syncAdmsPushNames(AdmsService $admsService)
+    {
+        $result = $admsService->syncAllEmployeesToAdms();
+
+        $message = $result['message'] ?? 'Sync completed.';
+        if ($result['success']) {
+            return back()->with('success', $message);
+        }
+
+        return back()->with('error', $message);
     }
 }

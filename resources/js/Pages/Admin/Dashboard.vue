@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
-import { Head, Link } from '@inertiajs/vue3';
+import { Head, Link, router } from '@inertiajs/vue3';
 import AdminLayout from '@/Layouts/AdminLayout.vue';
 import {
     Users,
@@ -15,7 +15,8 @@ import {
     Building,
     TrendingUp,
     Activity,
-    Calendar
+    Calendar,
+    RefreshCw
 } from 'lucide-vue-next';
 import {
     Chart as ChartJS,
@@ -45,6 +46,35 @@ const props = defineProps({
     charts: Object,
     recent_punches: Array,
 });
+
+const syncingNames = ref(false);
+const autoSyncEnabled = ref(props.stats.auto_sync_enabled);
+const togglingAutoSync = ref(false);
+
+function syncNamesToAdms() {
+    syncingNames.value = true;
+    router.post(route('admin.sync-adms-push-names'), {}, {
+        onFinish: () => { syncingNames.value = false; },
+    });
+}
+
+function toggleAutoSync() {
+    togglingAutoSync.value = true;
+    router.post(route('admin.settings.adms-auto-sync'), {
+        enabled: !autoSyncEnabled.value,
+    }, {
+        onSuccess: () => {
+            autoSyncEnabled.value = !autoSyncEnabled.value;
+            togglingAutoSync.value = false;
+        },
+        onError: () => {
+            togglingAutoSync.value = false;
+        },
+        onFinish: () => {
+            togglingAutoSync.value = false;
+        },
+    });
+}
 
 const chartCanvas = ref(null);
 let chartInstance = null;
@@ -264,6 +294,58 @@ onUnmounted(() => {
                     </span>
                     <span v-else class="text-slate-400">All bindings approved</span>
                 </div>
+            </div>
+        </div>
+
+        <!-- ADMS Sync Actions -->
+        <div class="flex flex-wrap items-center gap-3 mb-6">
+            <button
+                @click="syncNamesToAdms"
+                :disabled="syncingNames"
+                class="px-4 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold text-xs shadow-sm flex items-center gap-2 transition"
+            >
+                <span v-if="syncingNames" class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+                <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                {{ syncingNames ? 'Pushing Names...' : 'Sync Names to ADMS' }}
+            </button>
+            <span class="text-[11px] text-slate-500">Push employee names to ADMS via OPERLOG USER records</span>
+        </div>
+
+        <!-- Auto ADMS Sync Toggle -->
+        <div class="mb-6 p-5 rounded-2xl bg-slate-900 border border-slate-800 shadow-sm">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
+                        <RefreshCw class="w-5 h-5" />
+                    </div>
+                    <div>
+                        <h3 class="text-sm font-bold text-white">Auto Sync Employees from ADMS</h3>
+                        <p class="text-xs text-slate-400 mt-0.5">
+                            Automatically sync employee data from ADMS every 24 hours
+                        </p>
+                    </div>
+                </div>
+                <button
+                    @click="toggleAutoSync"
+                    :disabled="togglingAutoSync"
+                    class="relative inline-flex h-7 w-12 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
+                    :class="autoSyncEnabled ? 'bg-emerald-500' : 'bg-slate-700'"
+                    role="switch"
+                    :aria-checked="autoSyncEnabled"
+                >
+                    <span
+                        class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out"
+                        :class="autoSyncEnabled ? 'translate-x-5' : 'translate-x-0.5'"
+                    ></span>
+                </button>
+            </div>
+            <div class="mt-3 flex items-center gap-4 text-xs text-slate-500">
+                <span class="flex items-center gap-1.5">
+                    <span class="w-1.5 h-1.5 rounded-full" :class="autoSyncEnabled ? 'bg-emerald-400' : 'bg-slate-600'"></span>
+                    <span>{{ autoSyncEnabled ? 'Enabled — sync runs daily at midnight' : 'Disabled — use --force flag to run manually' }}</span>
+                </span>
             </div>
         </div>
 

@@ -56,4 +56,25 @@ class AppSettingController extends Controller
 
         return redirect()->back()->with('success', 'System configurations and mobile release info updated successfully.');
     }
+
+    /**
+     * Toggle the ADMS auto-sync enabled setting.
+     */
+    public function toggleAdmsAutoSync(Request $request): \Illuminate\Http\RedirectResponse
+    {
+        $validated = $request->validate([
+            'enabled' => 'required|boolean',
+        ]);
+
+        $value = $validated['enabled'] ? 'true' : 'false';
+        AppConfig::updateOrCreate(
+            ['key' => 'adms_auto_sync_enabled'],
+            ['value' => $value, 'description' => 'Enable automatic ADMS employee sync every 24 hours']
+        );
+
+        return redirect()->back()->with(
+            'success',
+            $validated['enabled'] ? 'Auto-sync enabled. Employees will sync every 24 hours.' : 'Auto-sync disabled.'
+        );
+    }
 }

@@ -14,6 +14,8 @@ use App\Models\PunchLog;
 use App\Models\DeviceBinding;
 use App\Models\LeaveBalance;
 use App\Models\Branch;
+use App\Models\AdmsRegisteredEmployee;
+use App\Services\AdmsService;
 use Carbon\Carbon;
 
 class EmployeeController extends Controller
@@ -197,5 +199,84 @@ class EmployeeController extends Controller
         $employee->update(['employee_type' => $validated['employee_type']]);
 
         return back()->with('success', "Employee role updated to {$validated['employee_type']} for {$employee->full_name}.");
+    }
+
+    /**
+     * Delete an employee from ADMS server and remove their registered record.
+     */
+    public function deleteFromAdms(Employee $employee)
+    {
+        $admsService = app(AdmsService::class);
+        $result = $admsService->deleteEmployeeFromAdms($employee->employee_id);
+
+        if ($result['success']) {
+            // Remove the AdmsRegisteredEmployee record
+            AdmsRegisteredEmployee::where('employee_id', $employee->employee_id)->delete();
+
+            return back()->with('success', "Employee {$employee->full_name} (PIN: {$employee->employee_id}) deleted from ADMS successfully.");
+        }
+
+        return back()->with('error', "Failed to delete employee from ADMS: {$result['message']}");
+    }
+    /**
+     * Store a newly created employee in the database and register on ADMS.
+     */
+    public function store(Request $request)
+    {
+        $validated = $request->validate([
+            'employee_id' => 'required|string|max:20|unique:employees,employee_id',
+            'full_name' => 'required|string|max:255',
+            'department' => 'nullable|string|max:255',
+            'employee_type' => 'nullable|string|in:regular,mechanic,sales',
+            'shift_schedule_id' => 'nullable|exists:shift_schedules,id',
+            'company_id' => 'nullable|exists:companies,id',
+            'group_id' => 'nullable|exists:employee_groups,id',
+        ]);
+
+        $employee = Employee::create([
+            'employee_id' => $validated['employee_id'],
+            'full_name' => $validated['full_name'],
+            'department' => $validated['department'] ?? null,
+            'employee_type' => $validated['employee_type'] ?? 'regular',
+            'shift_schedule_id' => $validated['shift_schedule_id'] ?? null,
+            'company_id' => $validated['company_id'] ?? null,
+            'group_id' => $validated['group_id'] ?? null,
+            'is_active' => true,
+            'is_deleted' => false,
+        ]);
+
+        // Register the new employee on ADMS as a background job
+        \App\Jobs\RegisterEmployeeOnAdms::dispatch($employee);
+
+        return redirect()->route('admin.employees')
+            ->with('success', "Employee {$employee->full_name} created successfully and queued for ADMS registration.");
+    }
+
+    /**
+     * Update the specified employee and re-register on ADMS if name or type changed.
+     */
+    public function update(Request $request, Employee $employee)
+    {
+        $validated = $request->validate([
+            'full_name' => 'required|string|max:255',
+            'department' => 'nullable|string|max:255',
+            'employee_type' => 'nullable|string|in:regular,mechanic,sales',
+            'shift_schedule_id' => 'nullable|exists:shift_schedules,id',
+            'company_id' => 'nullable|exists:companies,id',
+            'group_id' => 'nullable|exists:employee_groups,id',
+        ]);
+
+        $nameChanged = isset($validated['full_name']) && $validated['full_name'] !== $employee->full_name;
+        $typeChanged = isset($validated['employee_type']) && $validated['employee_type'] !== $employee->employee_type;
+
+        $employee->update($validated);
+
+        // If name or employee_type changed, re-register on ADMS to keep it in sync
+        if ($nameChanged || $typeChanged) {
+            \App\Jobs\RegisterEmployeeOnAdms::dispatch($employee);
+        }
+
+        return redirect()->route('admin.employees')
+            ->with('success', "Employee {$employee->full_name} updated successfully.");
     }
 }
