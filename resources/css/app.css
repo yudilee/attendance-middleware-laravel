@@ -1,0 +1,88 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Light mode seamless theme support */
+html:not(.dark) {
+    color-scheme: light;
+}
+
+html:not(.dark) .bg-slate-950 {
+    background-color: #f8fafc !important;
+}
+
+html:not(.dark) .bg-slate-900 {
+    background-color: #ffffff !important;
+}
+
+html:not(.dark) .bg-slate-950\/60,
+html:not(.dark) .bg-slate-950\/80,
+html:not(.dark) .bg-slate-950\/40 {
+    background-color: #f1f5f9 !important;
+}
+
+html:not(.dark) .border-slate-800,
+html:not(.dark) .border-slate-800\/80,
+html:not(.dark) .border-slate-800\/60 {
+    border-color: #e2e8f0 !important;
+}
+
+html:not(.dark) .divide-slate-800\/60 > * + * {
+    border-color: #f1f5f9 !important;
+}
+
+html:not(.dark) .text-white {
+    color: #0f172a !important;
+}
+
+html:not(.dark) .text-slate-100,
+html:not(.dark) .text-slate-200,
+html:not(.dark) .text-slate-300 {
+    color: #334155 !important;
+}
+
+html:not(.dark) .text-slate-400 {
+    color: #64748b !important;
+}
+
+html:not(.dark) .hover\:bg-slate-800\/40:hover,
+html:not(.dark) .hover\:bg-slate-800\/60:hover {
+    background-color: #f8fafc !important;
+}
+
+html:not(.dark) input,
+html:not(.dark) select,
+html:not(.dark) textarea {
+    background-color: #ffffff !important;
+    border-color: #cbd5e1 !important;
+    color: #0f172a !important;
+}
+
+/* Global Typography Scaling & Readability */
+body {
+    font-size: 15px;
+    letter-spacing: -0.01em;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Elevate small text badges and captions */
+.text-\[10px\] {
+    font-size: 0.75rem !important; /* 12px */
+    line-height: 1rem !important;
+}
+
+.text-\[11px\] {
+    font-size: 0.8125rem !important; /* 13px */
+    line-height: 1.125rem !important;
+}
+
+/* More readable table cells */
+table th {
+    font-size: 0.8125rem !important;
+    letter-spacing: 0.05em;
+}
+
+table td {
+    font-size: 0.925rem !important;
+}
+

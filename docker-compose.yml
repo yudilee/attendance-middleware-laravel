@@ -1,0 +1,134 @@
+version: '3.8'
+
+services:
+  # ── 1. Laravel Web Application (Inertia.js + REST API) ───────────────
+  attendance_middleware:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: attendance_middleware
+    restart: always
+    ports:
+      - "8999:8999"
+    environment:
+      - APP_NAME="Attendance HRM"
+      - APP_ENV=production
+      - APP_KEY=${APP_KEY:-base64:X8Oebk2J5QyGz34T4QZ1QyM7eY8yJ7g3QyK5Qz34T4Q=}
+      - APP_DEBUG=false
+      - APP_URL=https://attendance.hartonomotor-group.com
+      - DB_CONNECTION=pgsql
+      - DB_HOST=attendance_db
+      - DB_PORT=5432
+      - DB_DATABASE=attendance_db
+      - DB_USERNAME=attendance
+      - DB_PASSWORD=secret_db_password
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - QUEUE_CONNECTION=redis
+      - CACHE_STORE=redis
+      - SESSION_DRIVER=redis
+      - TZ=Asia/Jakarta
+    depends_on:
+      attendance_db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  # ── 2. Queue Worker (ADMS Sync & Batch Punch Processing) ─────────────
+  attendance_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: attendance_worker
+    restart: unless-stopped
+    command: php artisan queue:work redis --sleep=3 --tries=3
+    environment:
+      - APP_ENV=production
+      - APP_KEY=${APP_KEY:-base64:X8Oebk2J5QyGz34T4QZ1QyM7eY8yJ7g3QyK5Qz34T4Q=}
+      - DB_CONNECTION=pgsql
+      - DB_HOST=attendance_db
+      - DB_PORT=5432
+      - DB_DATABASE=attendance_db
+      - DB_USERNAME=attendance
+      - DB_PASSWORD=secret_db_password
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - QUEUE_CONNECTION=redis
+      - TZ=Asia/Jakarta
+    depends_on:
+      - attendance_middleware
+      - redis
+
+  # ── 3. Real-Time WebSockets (Laravel Reverb) ──────────────────────────
+  attendance_reverb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: attendance_reverb
+    restart: unless-stopped
+    command: php artisan reverb:start --port=8080
+    ports:
+      - "6002:8080"
+    environment:
+      - APP_ENV=production
+      - APP_KEY=${APP_KEY:-base64:X8Oebk2J5QyGz34T4QZ1QyM7eY8yJ7g3QyK5Qz34T4Q=}
+      - REVERB_APP_ID=${REVERB_APP_ID:-attendance_app}
+      - REVERB_APP_KEY=${REVERB_APP_KEY:-attendance_key}
+      - REVERB_APP_SECRET=${REVERB_APP_SECRET:-attendance_secret}
+      - REDIS_HOST=redis
+    depends_on:
+      - attendance_middleware
+
+  # ── 4. Task Scheduler (Daily ADMS Sync at 02:00 AM) ───────────────────
+  attendance_scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: attendance_scheduler
+    restart: unless-stopped
+    command: php artisan schedule:work
+    environment:
+      - APP_ENV=production
+      - APP_KEY=${APP_KEY:-base64:X8Oebk2J5QyGz34T4QZ1QyM7eY8yJ7g3QyK5Qz34T4Q=}
+      - DB_CONNECTION=pgsql
+      - DB_HOST=attendance_db
+      - DB_DATABASE=attendance_db
+      - DB_USERNAME=attendance
+      - DB_PASSWORD=secret_db_password
+      - REDIS_HOST=redis
+      - TZ=Asia/Jakarta
+    depends_on:
+      - attendance_middleware
+
+  # ── 5. Existing PostgreSQL 15 (Preserves All Existing Data) ───────────
+  attendance_db:
+    image: postgres:15-alpine
+    container_name: attendance_db
+    restart: always
+    environment:
+      - POSTGRES_USER=attendance
+      - POSTGRES_PASSWORD=secret_db_password
+      - POSTGRES_DB=attendance_db
+    volumes:
+      - /data/compose/24/pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U attendance -d attendance_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── 6. Redis Cache & Queue ────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: attendance_redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  redis_data:
