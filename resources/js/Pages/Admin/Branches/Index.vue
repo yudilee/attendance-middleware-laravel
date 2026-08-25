@@ -442,6 +442,23 @@ const backToVisualizer = () => {
     });
 };
 
+const quickAssignShift = (branch, shiftId) => {
+    router.put(`/admin/branches/${branch.id}`, {
+        name: branch.name,
+        latitude: branch.latitude,
+        longitude: branch.longitude,
+        radius_meters: branch.radius_meters,
+        geofence_type: branch.geofence_type || 'circle',
+        polygon_coordinates: branch.polygon_coordinates ? JSON.stringify(branch.polygon_coordinates) : '',
+        shift_schedule_id: shiftId ? parseInt(shiftId) : null,
+        is_active: branch.is_active,
+        timezone_name: branch.timezone_name || 'Asia/Jakarta',
+        timezone_offset: branch.timezone_offset || 7,
+    }, {
+        preserveScroll: true,
+    });
+};
+
 const deleteBranch = (id) => {
     if (confirm('Delete this branch location and all its checkpoints?')) {
         router.delete(`/admin/branches/${id}`);
@@ -550,32 +567,44 @@ watch(() => props.branches, () => {
                             </div>
                         </div>
 
-                        <div class="space-y-1.5 text-xs pt-2.5 border-t border-slate-100 dark:border-slate-800/80">
-                            <div class="flex justify-between items-center">
-                                <span class="text-slate-500 dark:text-slate-400">Schedule:</span>
-                                <span v-if="branch.shift_hours" class="font-mono text-[11px] text-blue-600 dark:text-blue-400 font-semibold">
-                                    ⏰ {{ branch.shift_hours }}
-                                </span>
-                                <span v-else class="text-[11px] text-slate-400 font-mono">
-                                    08:00 - 17:00 (Default)
-                                </span>
+                        <div class="space-y-2 text-xs pt-2.5 border-t border-slate-100 dark:border-slate-800/80">
+                            <!-- Quick Operating Hours Selector -->
+                            <div class="p-2 rounded-xl bg-slate-50 dark:bg-slate-950/80 border border-slate-200/80 dark:border-slate-800 flex flex-col gap-1">
+                                <div class="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                                    <span class="flex items-center gap-1">
+                                        <Clock class="w-3 h-3 text-blue-600 dark:text-blue-400" />
+                                        Operating Schedule:
+                                    </span>
+                                </div>
+                                <select
+                                    :value="branch.shift_schedule_id ?? ''"
+                                    @click.stop
+                                    @change="quickAssignShift(branch, $event.target.value)"
+                                    class="w-full text-xs font-semibold px-2 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-blue-500 shadow-2xs"
+                                >
+                                    <option value="">Default (08:00 - 17:00, Grace: 15m)</option>
+                                    <option v-for="sh in shifts" :key="sh.id" :value="sh.id">
+                                        {{ sh.name }} ({{ sh.start_time }} - {{ sh.end_time }})
+                                    </option>
+                                </select>
                             </div>
-                            <div class="flex justify-between items-center">
-                                <span class="text-slate-500 dark:text-slate-400">Center:</span>
-                                <span class="font-mono text-[11px] text-slate-700 dark:text-slate-300">{{ branch.latitude.toFixed(4) }}, {{ branch.longitude.toFixed(4) }}</span>
+
+                            <div class="flex justify-between items-center text-[11px] text-slate-500 dark:text-slate-400">
+                                <span>Center:</span>
+                                <span class="font-mono text-slate-700 dark:text-slate-300">{{ branch.latitude.toFixed(4) }}, {{ branch.longitude.toFixed(4) }}</span>
                             </div>
-                            <div class="flex justify-between items-center">
-                                <span class="text-slate-500 dark:text-slate-400">Boundary:</span>
+                            <div class="flex justify-between items-center text-[11px] text-slate-500 dark:text-slate-400">
+                                <span>Boundary:</span>
                                 <span :class="[
-                                    'text-[11px] font-bold uppercase',
+                                    'font-bold uppercase',
                                     branch.geofence_type === 'polygon' ? 'text-emerald-600 dark:text-emerald-400' : 'text-blue-600 dark:text-blue-400'
                                 ]">
                                     {{ branch.geofence_type }} ({{ branch.radius_meters }}m)
                                 </span>
                             </div>
-                            <div class="flex justify-between items-center">
-                                <span class="text-slate-500 dark:text-slate-400">Checkpoints:</span>
-                                <span class="text-[11px] text-amber-600 dark:text-amber-400 font-semibold">{{ branch.checkpoints_count }} assigned</span>
+                            <div class="flex justify-between items-center text-[11px] text-slate-500 dark:text-slate-400">
+                                <span>Checkpoints:</span>
+                                <span class="text-amber-600 dark:text-amber-400 font-semibold">{{ branch.checkpoints_count }} assigned</span>
                             </div>
                         </div>
                     </div>
