@@ -61,6 +61,15 @@ class UserController extends Controller
                     'last_active' => Carbon::createFromTimestamp($s->last_activity)->diffForHumans(),
                 ];
             }
+        } elseif (Auth::check()) {
+            // Fallback for Redis / File session driver
+            $sessions[] = [
+                'id' => $request->session()->getId(),
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent() ?? 'Current Browser',
+                'is_current_device' => true,
+                'last_active' => 'Just now',
+            ];
         }
 
         return Inertia::render('Admin/Users/Index', [
