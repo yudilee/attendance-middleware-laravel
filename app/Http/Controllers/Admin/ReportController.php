@@ -44,7 +44,7 @@ class ReportController extends Controller
             // -------------------------------------------------------------
             // 🍱 DAILY CATERING & LUNCH ORDER REPORT
             // -------------------------------------------------------------
-            $employeesQuery = Employee::with(['group.branch', 'assignedBranch'])
+            $employeesQuery = Employee::with(['group.branch'])
                 ->where('is_deleted', false)
                 ->orderBy('full_name', 'asc');
 
@@ -91,11 +91,9 @@ class ReportController extends Controller
                 // Determine branch
                 $branchName = $firstPunch?->branch?->name
                     ?? $emp->group?->branch?->name
-                    ?? $emp->assignedBranch?->name
-                    ?? 'Unassigned Branch';
+                    ?? 'Default Branch';
                 $branchId = $firstPunch?->branch_id
-                    ?? $emp->group?->branch_id
-                    ?? $emp->assigned_branch_id;
+                    ?? $emp->group?->branch_id;
 
                 // Branch filter check
                 if ($branchFilter && $branchFilter !== 'all' && (int)$branchFilter !== (int)$branchId) {
@@ -330,7 +328,7 @@ class ReportController extends Controller
                 fputcsv($handle, ['Report Date:', $startDate, 'Morning Cutoff Time:', $cutoffTime]);
                 fputcsv($handle, []);
 
-                $allEmployees = Employee::with(['group.branch', 'assignedBranch'])
+                $allEmployees = Employee::with(['group.branch'])
                     ->where('is_deleted', false)
                     ->orderBy('department', 'asc')
                     ->orderBy('full_name', 'asc')
@@ -358,11 +356,9 @@ class ReportController extends Controller
 
                     $branchName = $firstPunch?->branch?->name
                         ?? $emp->group?->branch?->name
-                        ?? $emp->assignedBranch?->name
-                        ?? 'Unassigned Branch';
+                        ?? 'Default Branch';
                     $branchId = $firstPunch?->branch_id
-                        ?? $emp->group?->branch_id
-                        ?? $emp->assigned_branch_id;
+                        ?? $emp->group?->branch_id;
 
                     if ($branchFilter && $branchFilter !== 'all' && (int)$branchFilter !== (int)$branchId) {
                         continue;
