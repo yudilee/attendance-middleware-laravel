@@ -100,47 +100,62 @@ class AdmsService
             }
 
             $syncedCount = 0;
+            $skippedCount = 0;
+            $firstRowLogged = false;
             $now = Carbon::now();
             foreach ($usersRaw as $row) {
-                if (!is_array($row) || count($row) < 5) {
+                if (!is_array($row)) {
+                    Log::warning('ADMS row is not an array, skipping', ['row' => $row]);
                     continue;
                 }
 
-                $admsId = (string)$row[0];
-                $pin = (string)$row[1];
-                $name = trim((string)$row[2]);
-                $dept = (string)$row[4];
+                // ── Debug: Log structure of the first row ──
+                if (!$firstRowLogged) {
+                    Log::info('ADMS row structure', [
+                        'count' => count($row),
+                        'keys' => array_keys($row),
+                    ]);
+                    $firstRowLogged = true;
+                }
 
-                $emp = Employee::where('employee_id', $pin)->first();
-                if ($emp) {
-                    if ($emp->is_deleted) {
-                        continue;
-                    }
-                    if ($emp->employee_type && $emp->employee_type !== 'regular') {
-                        continue;
-                    }
+                // ── Debug: Log raw row data for every row ──
+                Log::debug('ADMS employee row', ['row' => $row]);
 
-                    $emp->adms_id = $admsId;
-                    if (!empty($name)) {
-                        $emp->full_name = $name;
-                    } elseif (empty($emp->full_name)) {
-                        $emp->full_name = "Employee {$pin}";
-                    }
-                    $emp->department = $dept;
-                    $emp->last_synced = $now;
-                    $emp->save();
-                } else {
-                    Employee::create([
-                        'adms_id' => $admsId,
-                        'employee_id' => $pin,
+                // The ADMS array format is: [pin, name, dept, None, None, None, None]
+                // Guard: require at least 3 elements for safe positional access
+                if (count($row) < 3) {
+                    Log::warning('ADMS row has fewer than 3 elements, skipping', ['count' => count($row), 'row' => $row]);
+                    $skippedCount++;
+                    continue;
+                }
+
+                $pin = (string)$row[0];       // Index 0 = employee_id (PIN), e.g. "000016376"
+                $name = trim((string)$row[1]); // Index 1 = full_name, e.g. "Agus Apri"
+                $dept = (string)$row[2];      // Index 2 = department, e.g. "1 Default Dept"
+
+                // ── Validate PIN — skip rows with empty PIN ──
+                if (empty($pin)) {
+                    Log::warning('Skipping ADMS row with empty PIN', ['row' => $row]);
+                    $skippedCount++;
+                    continue;
+                }
+
+                // ── Use updateOrCreate to avoid select-then-insert race condition ──
+                Employee::updateOrCreate(
+                    ['employee_id' => $pin],  // Match on PIN (index 0)
+                    [
+                        'adms_id' => $pin,     // adms_id is also the PIN (no separate ADMS ID in this format)
                         'full_name' => !empty($name) ? $name : "Employee {$pin}",
                         'department' => $dept,
                         'is_active' => true,
                         'is_deleted' => false,
                         'employee_type' => 'regular',
                         'last_synced' => $now,
-                    ]);
-                }
+                    ]
+                );
+
+                // ── Reset is_deleted if employee was previously soft-deleted ──
+                // (updateOrCreate with is_deleted=false already handles this)
 
                 // Upsert AdmsRegisteredEmployee record for this synced employee
                 AdmsRegisteredEmployee::updateOrCreate(
@@ -523,6 +538,53 @@ class AdmsService
             return [
                 'success' => false,
                 'message' => "Failed to register employee on ADMS: {$errorMsg}",
+            ];
+        }
+    }
+
+    /**
+     * Send a heartbeat/ping to the ADMS iClock server to maintain Online status.
+     *
+     * Makes a GET request to the ADMS iClock cdata endpoint with device info,
+     * simulating a device heartbeat so the ADMS server sees the gateway as online.
+     *
+     * @param string $sn Device Serial Number (default: VIRTUAL_MOBILE_01)
+     * @return array ['success' => bool, 'message' => string]
+     */
+    public function sendHeartbeat(string $sn = 'VIRTUAL_MOBILE_01'): array
+    {
+        $creds = AdmsCredential::where('is_active', true)->first();
+        $admsUrl = $creds && !empty($creds->url) ? rtrim($creds->url, '/') : 'https://adms.hartonomotor-group.com';
+
+        try {
+            $response = Http::withHeaders([
+                'User-Agent' => 'iClock Proxy/1.0',
+            ])->timeout(15)->get("{$admsUrl}/iclock/cdata", [
+                'SN' => $sn,
+                'DeviceName' => 'Mobile Gateway',
+                'options' => 'all',
+                'language' => '69',
+                'pushver' => '2.4.1',
+                'PushOptionsFlag' => '1',
+            ]);
+
+            if ($response->successful()) {
+                Log::info("ADMS heartbeat successful for SN: {$sn}");
+
+                return [
+                    'success' => true,
+                    'message' => "Heartbeat sent successfully for SN: {$sn}.",
+                ];
+            }
+
+            throw new \Exception("ADMS heartbeat returned HTTP {$response->status()}: {$response->body()}");
+        } catch (\Throwable $e) {
+            $errorMsg = $e->getMessage();
+            Log::warning("ADMS Heartbeat error for SN {$sn}: {$errorMsg}");
+
+            return [
+                'success' => false,
+                'message' => "ADMS heartbeat failed for SN {$sn}: {$errorMsg}",
             ];
         }
     }

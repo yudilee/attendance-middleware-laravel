@@ -15,10 +15,14 @@ Schedule::command('adms:sync-employees')
     ->daily()
     ->withoutOverlapping()
     ->description('Automatically sync employees from ADMS every 24 hours');
-
 // ADMS Retry Failed Pushes — retry pending/failed punch pushes every 5 minutes
 Schedule::command('adms:retry-failed-pushes')
     ->everyFiveMinutes()
     ->withoutOverlapping()
     ->description('Retry failed ADMS punch pushes every 5 minutes');
+
+// Fix Duplicate Employees — cleanup command (run manually with --dry-run first)
+// Usage: php artisan adms:fix-duplicates --dry-run   (preview)
+// Usage: php artisan adms:fix-duplicates --force      (apply cleanup)
+// NOTE: Command is auto-discovered in app/Console/Commands/ (Laravel 11)
 

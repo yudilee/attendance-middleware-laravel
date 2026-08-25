@@ -21,7 +21,7 @@ services:
       - DB_PORT=5432
       - DB_DATABASE=attendance_db
       - DB_USERNAME=attendance
-      - DB_PASSWORD=secret_db_password
+      - DB_PASSWORD=${DB_PASSWORD:-secret_db_password}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - QUEUE_CONNECTION=redis
@@ -50,7 +50,7 @@ services:
       - DB_PORT=5432
       - DB_DATABASE=attendance_db
       - DB_USERNAME=attendance
-      - DB_PASSWORD=secret_db_password
+      - DB_PASSWORD=${DB_PASSWORD:-secret_db_password}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - QUEUE_CONNECTION=redis
@@ -100,7 +100,7 @@ services:
       - DB_HOST=attendance_db
       - DB_DATABASE=attendance_db
       - DB_USERNAME=attendance
-      - DB_PASSWORD=secret_db_password
+      - DB_PASSWORD=${DB_PASSWORD:-secret_db_password}
       - REDIS_HOST=redis
       - TZ=Asia/Jakarta
     healthcheck:
@@ -119,7 +119,7 @@ services:
     restart: always
     environment:
       - POSTGRES_USER=attendance
-      - POSTGRES_PASSWORD=secret_db_password
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-secret_db_password}
       - POSTGRES_DB=attendance_db
     volumes:
       - /data/compose/24/pgdata:/var/lib/postgresql/data
