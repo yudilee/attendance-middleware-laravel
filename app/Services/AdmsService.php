@@ -251,26 +251,33 @@ class AdmsService
                 throw new \Exception("ADMS authentication failed with HTTP {$loginRes->status()}");
             }
 
-            // 3. Fetch transaction (punch) data
-            $url = "{$admsUrl}/iclock/data/transaction/?p=1&l=5000";
-            if ($startDate) {
-                $url .= "&StartTime=" . urlencode($startDate);
+            // 3. Fetch transaction (punch) data across pages
+            $pagesToFetch = 2; // Up to 4,000 recent punch records
+            $allRows = [];
+
+            for ($page = 1; $page <= $pagesToFetch; $page++) {
+                $url = "{$admsUrl}/iclock/data/transaction/?p={$page}&l=2000";
+                $attlogRes = Http::withOptions(['cookies' => $cookieJar, 'timeout' => 45])
+                    ->get($url);
+
+                if (!$attlogRes->successful()) {
+                    Log::warning("Failed to fetch transaction page {$page} from ADMS: HTTP {$attlogRes->status()}");
+                    break;
+                }
+
+                $html = $attlogRes->body();
+                if (preg_match('/data=\[(.*?)\];/s', $html, $matches)) {
+                    $dataStr = '[' . $matches[1] . ']';
+                    $dataStr = str_replace('deviceText', '""', $dataStr);
+                    $dataStr = preg_replace('/,\s*\]/', ']', $dataStr);
+                    $pageRows = json_decode($dataStr, true);
+                    if (is_array($pageRows) && !empty($pageRows)) {
+                        $allRows = array_merge($allRows, $pageRows);
+                    }
+                }
             }
-            if ($endDate) {
-                $url .= "&EndTime=" . urlencode($endDate);
-            }
 
-            $attlogRes = Http::withOptions(['cookies' => $cookieJar, 'timeout' => 45])
-                ->get($url);
-
-            if (!$attlogRes->successful()) {
-                throw new \Exception("Failed to fetch transactions from ADMS: HTTP {$attlogRes->status()}");
-            }
-
-            $html = $attlogRes->body();
-
-            // 4. Extract data array
-            if (!preg_match('/data=\[(.*?)\];/s', $html, $matches)) {
+            if (empty($allRows)) {
                 return [
                     'success' => true,
                     'message' => 'No punch log data array found in ADMS transaction response.',
@@ -278,14 +285,7 @@ class AdmsService
                 ];
             }
 
-            $dataStr = '[' . $matches[1] . ']';
-            $dataStr = str_replace('deviceText', '""', $dataStr);
-            $dataStr = preg_replace('/,\s*\]/', ']', $dataStr);
-
-            $rows = json_decode($dataStr, true);
-            if (!is_array($rows)) {
-                throw new \Exception('Failed to parse transaction JSON data from ADMS.');
-            }
+            $rows = $allRows;
 
             // Cache known branches
             $branches = \App\Models\Branch::where('is_active', true)->get();
