@@ -129,13 +129,18 @@ class AdmsService
                     continue;
                 }
 
-                $pin = (string)$row[0];       // Index 0 = employee_id (PIN), e.g. "000016376"
-                $name = trim((string)$row[1]); // Index 1 = full_name, e.g. "Agus Apri"
-                $dept = (string)$row[2];      // Index 2 = department, e.g. "1 Default Dept"
+                $pin = trim((string)($row[0] ?? ''));       // Index 0 = employee_id (PIN), e.g. "000016376"
+                $name = trim((string)($row[1] ?? ''));      // Index 1 = full_name, e.g. "Agus Apri"
+                $dept = trim((string)($row[2] ?? ''));      // Index 2 = department, e.g. "1 Default Dept"
 
-                // ── Validate PIN — skip rows with empty PIN ──
-                if (empty($pin)) {
-                    Log::warning('Skipping ADMS row with empty PIN', ['row' => $row]);
+                // ── Validate PIN & Name — skip empty/whitespace PINs and department header/summary rows ──
+                if (
+                    empty($pin) ||
+                    in_array(strtolower($pin), ['none', 'null', '-', '--', 'undefined', 'n/a']) ||
+                    !preg_match('/^[0-9A-Za-z_-]+$/', $pin) ||
+                    $name === '1 Default Dept' && (empty($pin) || $dept === 'None')
+                ) {
+                    Log::warning('Skipping invalid ADMS row (empty/invalid PIN or header row)', ['pin' => $pin, 'name' => $name, 'dept' => $dept, 'row' => $row]);
                     $skippedCount++;
                     continue;
                 }

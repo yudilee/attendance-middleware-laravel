@@ -478,11 +478,11 @@ watch(() => props.branches, () => {
             <!-- Header Actions -->
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-2">
                 <div>
-                    <h2 class="text-lg font-bold text-white flex items-center gap-2">
-                        <Compass class="w-5 h-5 text-blue-400" />
+                    <h2 class="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                        <Compass class="w-5 h-5 text-blue-600 dark:text-blue-400" />
                         Branch Spatial Map & Geofences
                     </h2>
-                    <p class="text-xs text-slate-400">Read-only overview of all branch geofences. Click 'Edit' or '+ Add New Branch' to modify boundaries on the map.</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Read-only overview of all branch geofences. Click 'Edit' or '+ Add New Branch' to modify boundaries on the map.</p>
                 </div>
 
                 <button
@@ -497,7 +497,7 @@ watch(() => props.branches, () => {
             <!-- Visualizer Split Layout -->
             <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 h-[calc(100vh-175px)] min-h-[600px]">
                 <!-- Left: Branch Roster Cards (4 Cols) -->
-                <div class="lg:col-span-4 flex flex-col gap-3 overflow-y-auto pr-1">
+                <div class="lg:col-span-4 flex flex-col gap-3 overflow-y-auto pr-1 sidebar-scroll">
                     <div
                         v-for="branch in branches"
                         :key="branch.id"
@@ -505,8 +505,8 @@ watch(() => props.branches, () => {
                         :class="[
                             'p-4 rounded-2xl border transition-all cursor-pointer relative group',
                             selectedBranch?.id === branch.id
-                                ? 'bg-slate-900 border-blue-500/60 shadow-lg shadow-blue-500/10 ring-1 ring-blue-500/40'
-                                : 'bg-slate-900/90 border-slate-800 hover:border-slate-700 hover:bg-slate-800/60'
+                                ? 'bg-blue-50/80 dark:bg-slate-900 border-blue-500 shadow-md shadow-blue-500/10 ring-1 ring-blue-500/40'
+                                : 'bg-white dark:bg-slate-900/90 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/60 shadow-xs'
                         ]"
                     >
                         <div class="flex items-start justify-between gap-2 mb-2">
@@ -514,13 +514,13 @@ watch(() => props.branches, () => {
                                 <div :class="[
                                     'w-8 h-8 rounded-xl flex items-center justify-center text-xs font-bold',
                                     branch.geofence_type === 'polygon'
-                                        ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400'
-                                        : 'bg-blue-500/10 border border-blue-500/20 text-blue-400'
+                                        ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400'
+                                        : 'bg-blue-500/10 border border-blue-500/20 text-blue-600 dark:text-blue-400'
                                 ]">
                                     <MapPin class="w-4 h-4" />
                                 </div>
                                 <div>
-                                    <h4 class="text-sm font-bold text-white group-hover:text-blue-300 transition">{{ branch.name }}</h4>
+                                    <h4 class="text-sm font-bold text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-300 transition">{{ branch.name }}</h4>
                                     <span class="text-[10px] text-slate-500 font-mono">ID: #{{ branch.id }}</span>
                                 </div>
                             </div>
@@ -528,14 +528,14 @@ watch(() => props.branches, () => {
                             <div class="flex items-center gap-1">
                                 <button
                                     @click.stop="openEditView(branch)"
-                                    class="p-1.5 rounded-lg text-slate-400 hover:bg-blue-600/20 hover:text-blue-300 transition"
+                                    class="p-1.5 rounded-lg text-slate-400 hover:bg-blue-50 dark:hover:bg-blue-600/20 hover:text-blue-600 dark:hover:text-blue-300 transition"
                                     title="Edit Branch & Draw Geofence"
                                 >
                                     <Edit2 class="w-3.5 h-3.5" />
                                 </button>
                                 <button
                                     @click.stop="deleteBranch(branch.id)"
-                                    class="p-1.5 rounded-lg text-slate-400 hover:bg-rose-500/20 hover:text-rose-400 transition"
+                                    class="p-1.5 rounded-lg text-slate-400 hover:bg-rose-50 dark:hover:bg-rose-500/20 hover:text-rose-600 dark:hover:text-rose-400 transition"
                                     title="Delete Branch"
                                 >
                                     <Trash2 class="w-3.5 h-3.5" />
@@ -543,41 +543,41 @@ watch(() => props.branches, () => {
                             </div>
                         </div>
 
-                        <div class="space-y-1 text-xs text-slate-300 pt-2 border-t border-slate-800/80">
-                            <div class="flex justify-between">
-                                <span class="text-slate-500">Center:</span>
-                                <span class="font-mono text-[11px]">{{ branch.latitude.toFixed(4) }}, {{ branch.longitude.toFixed(4) }}</span>
+                        <div class="space-y-1.5 text-xs pt-2.5 border-t border-slate-100 dark:border-slate-800/80">
+                            <div class="flex justify-between items-center">
+                                <span class="text-slate-500 dark:text-slate-400">Center:</span>
+                                <span class="font-mono text-[11px] text-slate-700 dark:text-slate-300">{{ branch.latitude.toFixed(4) }}, {{ branch.longitude.toFixed(4) }}</span>
                             </div>
-                            <div class="flex justify-between">
-                                <span class="text-slate-500">Boundary:</span>
+                            <div class="flex justify-between items-center">
+                                <span class="text-slate-500 dark:text-slate-400">Boundary:</span>
                                 <span :class="[
-                                    'text-[11px] font-semibold uppercase',
-                                    branch.geofence_type === 'polygon' ? 'text-emerald-400' : 'text-blue-400'
+                                    'text-[11px] font-bold uppercase',
+                                    branch.geofence_type === 'polygon' ? 'text-emerald-600 dark:text-emerald-400' : 'text-blue-600 dark:text-blue-400'
                                 ]">
                                     {{ branch.geofence_type }} ({{ branch.radius_meters }}m)
                                 </span>
                             </div>
-                            <div class="flex justify-between">
-                                <span class="text-slate-500">Checkpoints:</span>
-                                <span class="text-[11px] text-amber-400 font-medium">{{ branch.checkpoints_count }} assigned</span>
+                            <div class="flex justify-between items-center">
+                                <span class="text-slate-500 dark:text-slate-400">Checkpoints:</span>
+                                <span class="text-[11px] text-amber-600 dark:text-amber-400 font-semibold">{{ branch.checkpoints_count }} assigned</span>
                             </div>
                         </div>
                     </div>
 
-                    <div v-if="branches.length === 0" class="p-8 text-center bg-slate-900 border border-slate-800 rounded-2xl text-slate-500 text-xs">
+                    <div v-if="branches.length === 0" class="p-8 text-center bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl text-slate-500 text-xs shadow-xs">
                         No branches configured. Click "+ Add New Branch" to create one.
                     </div>
                 </div>
 
                 <!-- Right: Read-Only Leaflet Map (8 Cols) -->
-                <div class="lg:col-span-8 bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl relative flex flex-col">
-                    <div class="absolute top-4 left-4 z-20 flex items-center gap-2 bg-slate-900/90 border border-slate-800/90 backdrop-blur-md px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-200 shadow-xl">
-                        <Layers class="w-3.5 h-3.5 text-blue-400" />
+                <div class="lg:col-span-8 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-xl relative flex flex-col">
+                    <div class="absolute top-4 left-4 z-20 flex items-center gap-2 bg-white/95 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800/90 backdrop-blur-md px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-800 dark:text-slate-200 shadow-lg">
+                        <Layers class="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
                         <span>Live Branch Geofences</span>
-                        <span class="text-slate-500">|</span>
-                        <span class="text-blue-400 flex items-center gap-1">⭕ Circle</span>
-                        <span class="text-emerald-400 flex items-center gap-1">⬡ Polygon</span>
-                        <span class="text-amber-400 flex items-center gap-1">🟡 Checkpoint</span>
+                        <span class="text-slate-400 dark:text-slate-500">|</span>
+                        <span class="text-blue-600 dark:text-blue-400 flex items-center gap-1">⭕ Circle</span>
+                        <span class="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">⬡ Polygon</span>
+                        <span class="text-amber-600 dark:text-amber-400 flex items-center gap-1">🟡 Checkpoint</span>
                     </div>
 
                     <div id="visualizerMap" class="w-full h-full min-h-[500px] z-10"></div>
@@ -590,20 +590,20 @@ watch(() => props.branches, () => {
         <!-- ========================================================= -->
         <div v-else-if="currentView === 'editor'" class="space-y-4">
             <!-- Header Bar -->
-            <div class="flex items-center justify-between bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
+            <div class="flex items-center justify-between bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs">
                 <div class="flex items-center gap-3">
                     <button
                         @click="backToVisualizer"
-                        class="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center gap-1.5 text-xs font-semibold"
+                        class="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition flex items-center gap-1.5 text-xs font-semibold"
                     >
                         <ArrowLeft class="w-4 h-4" />
                         Back to Visualizer
                     </button>
                     <div>
-                        <h3 class="text-sm font-bold text-white">
+                        <h3 class="text-sm font-bold text-slate-900 dark:text-white">
                             {{ isEditing ? `Editing: ${form.name}` : 'Create New Branch' }}
                         </h3>
-                        <p class="text-[11px] text-slate-400">Use the interactive map on the right to freely draw polygon shapes or drag the center pin.</p>
+                        <p class="text-[11px] text-slate-500 dark:text-slate-400">Use the interactive map on the right to freely draw polygon shapes or drag the center pin.</p>
                     </div>
                 </div>
 
@@ -611,7 +611,7 @@ watch(() => props.branches, () => {
                     <button
                         type="button"
                         @click="backToVisualizer"
-                        class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
+                        class="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold transition"
                     >
                         Cancel
                     </button>
@@ -629,23 +629,23 @@ watch(() => props.branches, () => {
             <!-- 2-Column Editor Layout -->
             <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 h-[calc(100vh-210px)] min-h-[580px]">
                 <!-- Left: Form Controls (5 Cols) -->
-                <div class="lg:col-span-5 bg-slate-900 border border-slate-800 rounded-2xl p-5 overflow-y-auto space-y-4 shadow-xl">
+                <div class="lg:col-span-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 overflow-y-auto space-y-4 shadow-xl sidebar-scroll">
                     <!-- Branch Name -->
                     <div>
-                        <label class="block text-xs font-semibold text-slate-300 mb-1">Branch Name</label>
+                        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Branch Name</label>
                         <input
                             v-model="form.name"
                             type="text"
                             required
                             placeholder="e.g. HRM Surabaya HQ"
-                            class="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+                            class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm text-slate-900 dark:text-slate-200 focus:outline-none focus:border-blue-500"
                         />
                     </div>
 
                     <!-- Geofence Boundary Selector -->
                     <div>
-                        <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Geofence Boundary Type</label>
-                        <div class="grid grid-cols-2 gap-2 p-1 bg-slate-950 border border-slate-800 rounded-xl">
+                        <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Geofence Boundary Type</label>
+                        <div class="grid grid-cols-2 gap-2 p-1 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl">
                             <button
                                 type="button"
                                 @click="switchGeofenceType('circle')"
@@ -653,7 +653,7 @@ watch(() => props.branches, () => {
                                     'py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5',
                                     form.geofence_type === 'circle'
                                         ? 'bg-blue-600 text-white shadow-md'
-                                        : 'text-slate-400 hover:text-white'
+                                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                                 ]"
                             >
                                 ⭕ Circular Radius
@@ -665,7 +665,7 @@ watch(() => props.branches, () => {
                                     'py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5',
                                     form.geofence_type === 'polygon'
                                         ? 'bg-emerald-600 text-white shadow-md'
-                                        : 'text-slate-400 hover:text-white'
+                                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                                 ]"
                             >
                                 ⬡ Polygon (Free Draw)
@@ -676,31 +676,31 @@ watch(() => props.branches, () => {
                     <!-- Coordinates & Radius -->
                     <div class="grid grid-cols-2 gap-3">
                         <div>
-                            <label class="block text-xs font-semibold text-slate-300 mb-1">Latitude</label>
+                            <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Latitude</label>
                             <input
                                 v-model.number="form.latitude"
                                 @input="updateEditorOverlays"
                                 type="number"
                                 step="any"
                                 required
-                                class="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-slate-200 focus:outline-none focus:border-blue-500"
+                                class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-mono text-slate-900 dark:text-slate-200 focus:outline-none focus:border-blue-500"
                             />
                         </div>
                         <div>
-                            <label class="block text-xs font-semibold text-slate-300 mb-1">Longitude</label>
+                            <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Longitude</label>
                             <input
                                 v-model.number="form.longitude"
                                 @input="updateEditorOverlays"
                                 type="number"
                                 step="any"
                                 required
-                                class="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-slate-200 focus:outline-none focus:border-blue-500"
+                                class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-mono text-slate-900 dark:text-slate-200 focus:outline-none focus:border-blue-500"
                             />
                         </div>
                         <div class="col-span-2">
                             <div class="flex items-center justify-between mb-1">
-                                <label class="text-xs font-semibold text-slate-300">Allowed Radius (Meters)</label>
-                                <span class="text-xs font-mono font-bold text-blue-400">{{ form.radius_meters }} m</span>
+                                <label class="text-xs font-semibold text-slate-700 dark:text-slate-300">Allowed Radius (Meters)</label>
+                                <span class="text-xs font-mono font-bold text-blue-600 dark:text-blue-400">{{ form.radius_meters }} m</span>
                             </div>
                             <div class="flex items-center gap-3">
                                 <input
@@ -710,23 +710,23 @@ watch(() => props.branches, () => {
                                     min="10"
                                     max="500"
                                     step="5"
-                                    class="w-full h-2 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                    class="w-full h-2 bg-slate-200 dark:bg-slate-950 rounded-lg appearance-none cursor-pointer accent-blue-600"
                                 />
                                 <input
                                     v-model.number="form.radius_meters"
                                     @input="updateEditorOverlays"
                                     type="number"
                                     min="5"
-                                    class="w-20 px-2 py-1 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 font-mono text-right"
+                                    class="w-20 px-2 py-1 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs text-slate-900 dark:text-slate-200 font-mono text-right"
                                 />
                             </div>
                         </div>
                     </div>
 
                     <!-- Polygon Tool Actions -->
-                    <div v-if="form.geofence_type === 'polygon'" class="p-4 rounded-xl bg-slate-950 border border-emerald-500/30 space-y-3">
+                    <div v-if="form.geofence_type === 'polygon'" class="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-emerald-500/30 space-y-3">
                         <div class="flex items-center justify-between">
-                            <span class="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
+                            <span class="text-xs font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
                                 <PenTool class="w-4 h-4" />
                                 Polygon Free-Draw Tools
                             </span>
@@ -741,14 +741,14 @@ watch(() => props.branches, () => {
                                 <button
                                     type="button"
                                     @click="clearPolygonTool"
-                                    class="px-2.5 py-1 rounded-lg bg-rose-600/20 text-rose-400 border border-rose-500/30 text-xs font-semibold hover:bg-rose-600/30"
+                                    class="px-2.5 py-1 rounded-lg bg-rose-600/10 text-rose-600 dark:text-rose-400 border border-rose-500/30 text-xs font-semibold hover:bg-rose-600/20"
                                 >
                                     Clear
                                 </button>
                             </div>
                         </div>
 
-                        <p class="text-[11px] text-slate-400 leading-relaxed">
+                        <p class="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
                             Click <b>'Draw on Map'</b>, click multi-points on the map to construct the geofenced perimeter, and double-click to finish closing the shape. You can also drag the vertex points to adjust borders!
                         </p>
 
@@ -756,13 +756,13 @@ watch(() => props.branches, () => {
                             v-model="form.polygon_coordinates"
                             rows="2"
                             placeholder="[[lat, lng], [lat, lng], [lat, lng]]"
-                            class="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-[11px] font-mono text-slate-300 focus:outline-none focus:border-emerald-500"
+                            class="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-[11px] font-mono text-slate-800 dark:text-slate-300 focus:outline-none focus:border-emerald-500"
                         ></textarea>
                     </div>
 
                     <!-- Checkpoints Manager (When Editing) -->
-                    <div v-if="isEditing && selectedBranch" class="pt-3 border-t border-slate-800">
-                        <h4 class="text-xs font-bold uppercase tracking-wider text-amber-400 mb-2 flex items-center gap-1.5">
+                    <div v-if="isEditing && selectedBranch" class="pt-3 border-t border-slate-200 dark:border-slate-800">
+                        <h4 class="text-xs font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400 mb-2 flex items-center gap-1.5">
                             <MapPin class="w-4 h-4" />
                             Multipoint Checkpoints ({{ selectedBranch.checkpoints?.length || 0 }})
                         </h4>
@@ -771,16 +771,16 @@ watch(() => props.branches, () => {
                             <div
                                 v-for="cp in selectedBranch.checkpoints"
                                 :key="cp.id"
-                                class="flex items-center justify-between p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs"
+                                class="flex items-center justify-between p-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs"
                             >
                                 <div>
-                                    <span class="font-bold text-white">{{ cp.name }}</span>
+                                    <span class="font-bold text-slate-900 dark:text-white">{{ cp.name }}</span>
                                     <span class="text-slate-500 ml-2 font-mono text-[11px]">({{ cp.latitude.toFixed(4) }}, {{ cp.longitude.toFixed(4) }} • {{ cp.radius_meters }}m)</span>
                                 </div>
                                 <button
                                     type="button"
                                     @click="deleteCheckpoint(cp.id)"
-                                    class="p-1 rounded-lg text-slate-500 hover:text-rose-400"
+                                    class="p-1 rounded-lg text-slate-400 hover:text-rose-500"
                                 >
                                     <Trash2 class="w-3.5 h-3.5" />
                                 </button>
@@ -791,13 +791,13 @@ watch(() => props.branches, () => {
                         </div>
 
                         <!-- Add Checkpoint Inline Form -->
-                        <div class="grid grid-cols-1 sm:grid-cols-4 gap-2 bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                        <div class="grid grid-cols-1 sm:grid-cols-4 gap-2 bg-slate-50 dark:bg-slate-950 p-2.5 rounded-xl border border-slate-200 dark:border-slate-800">
                             <div class="sm:col-span-2">
                                 <input
                                     v-model="checkpointForm.name"
                                     type="text"
                                     placeholder="Point Name (e.g. Gate 2)"
-                                    class="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs text-slate-200"
+                                    class="w-full px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs text-slate-900 dark:text-slate-200"
                                 />
                             </div>
                             <div>
@@ -805,7 +805,7 @@ watch(() => props.branches, () => {
                                     v-model.number="checkpointForm.radius_meters"
                                     type="number"
                                     placeholder="Radius (m)"
-                                    class="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs text-slate-200"
+                                    class="w-full px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs text-slate-900 dark:text-slate-200"
                                 />
                             </div>
                             <button
@@ -821,13 +821,13 @@ watch(() => props.branches, () => {
                 </div>
 
                 <!-- Right: Dedicated Interactive Drawing Map (7 Cols) -->
-                <div class="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl relative flex flex-col">
-                    <div class="absolute top-4 right-4 z-20 flex items-center gap-2 bg-slate-900/95 border border-slate-800 backdrop-blur-md px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-200 shadow-xl">
-                        <span v-if="form.geofence_type === 'polygon'" class="text-emerald-400 flex items-center gap-1.5">
+                <div class="lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-xl relative flex flex-col">
+                    <div class="absolute top-4 right-4 z-20 flex items-center gap-2 bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 backdrop-blur-md px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-800 dark:text-slate-200 shadow-lg">
+                        <span v-if="form.geofence_type === 'polygon'" class="text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
                             <PenTool class="w-3.5 h-3.5" />
                             Polygon Free-Draw Active
                         </span>
-                        <span v-else class="text-blue-400 flex items-center gap-1.5">
+                        <span v-else class="text-blue-600 dark:text-blue-400 flex items-center gap-1.5">
                             <Compass class="w-3.5 h-3.5" />
                             Click Map or Drag Pin to Set Center
                         </span>

@@ -293,18 +293,18 @@ const downloadCsv = () => {
                         <td class="px-5 py-3.5">
                             <span :class="[
                                 'px-2.5 py-0.5 rounded-full text-xs font-semibold',
-                                p.punch_type === 'In' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
+                                p.punch_type === 'In' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' : 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20'
                             ]">
                                 {{ p.punch_type }}
                             </span>
                         </td>
-                        <td class="px-5 py-3.5 text-xs font-mono text-slate-300">{{ p.timestamp }}</td>
+                        <td class="px-5 py-3.5 text-xs font-mono text-slate-700 dark:text-slate-300">{{ p.timestamp }}</td>
                         <td class="px-5 py-3.5 text-xs">
-                            <span v-if="p.biometric_verified" class="text-emerald-400 font-semibold">Verified</span>
+                            <span v-if="p.biometric_verified" class="text-emerald-600 dark:text-emerald-400 font-semibold">Verified</span>
                             <span v-else class="text-slate-500">Standard</span>
                         </td>
                         <td class="px-5 py-3.5 text-xs">
-                            <span class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 font-mono">
+                            <span class="text-[11px] px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 font-mono font-medium shadow-2xs">
                                 {{ p.adms_status }}
                             </span>
                         </td>
