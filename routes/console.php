@@ -15,6 +15,12 @@ Schedule::command('adms:sync-employees')
     ->daily()
     ->withoutOverlapping()
     ->description('Automatically sync employees from ADMS every 24 hours');
+// ADMS Biometric Punch Sync — pull fingerprint punch records (ATTLOG) every 10 minutes
+Schedule::command('adms:sync-punches --days=2')
+    ->everyTenMinutes()
+    ->withoutOverlapping()
+    ->description('Pull biometric fingerprint punch records from ADMS every 10 minutes');
+
 // ADMS Retry Failed Pushes — retry pending/failed punch pushes every 5 minutes
 Schedule::command('adms:retry-failed-pushes')
     ->everyFiveMinutes()

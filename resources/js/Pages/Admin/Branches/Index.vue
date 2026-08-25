@@ -33,6 +33,10 @@ L.Icon.Default.mergeOptions({
 
 const props = defineProps({
     branches: Array,
+    shifts: {
+        type: Array,
+        default: () => [],
+    },
 });
 
 // View Mode: 'visualizer' | 'editor'
@@ -60,6 +64,7 @@ const form = ref({
     radius_meters: 50,
     geofence_type: 'circle',
     polygon_coordinates: '',
+    shift_schedule_id: null,
     is_active: true,
     timezone_name: 'Asia/Jakarta',
     timezone_offset: 7,
@@ -195,6 +200,7 @@ const openCreateView = () => {
         radius_meters: 50,
         geofence_type: 'circle',
         polygon_coordinates: '',
+        shift_schedule_id: null,
         is_active: true,
         timezone_name: 'Asia/Jakarta',
         timezone_offset: 7,
@@ -219,6 +225,7 @@ const openEditView = (branch) => {
         radius_meters: branch.radius_meters,
         geofence_type: branch.geofence_type || 'circle',
         polygon_coordinates: branch.polygon_coordinates ? JSON.stringify(branch.polygon_coordinates) : '',
+        shift_schedule_id: branch.shift_schedule_id ?? null,
         is_active: branch.is_active,
         timezone_name: branch.timezone_name || 'Asia/Jakarta',
         timezone_offset: branch.timezone_offset || 7,
@@ -545,6 +552,15 @@ watch(() => props.branches, () => {
 
                         <div class="space-y-1.5 text-xs pt-2.5 border-t border-slate-100 dark:border-slate-800/80">
                             <div class="flex justify-between items-center">
+                                <span class="text-slate-500 dark:text-slate-400">Schedule:</span>
+                                <span v-if="branch.shift_hours" class="font-mono text-[11px] text-blue-600 dark:text-blue-400 font-semibold">
+                                    ⏰ {{ branch.shift_hours }}
+                                </span>
+                                <span v-else class="text-[11px] text-slate-400 font-mono">
+                                    08:00 - 17:00 (Default)
+                                </span>
+                            </div>
+                            <div class="flex justify-between items-center">
                                 <span class="text-slate-500 dark:text-slate-400">Center:</span>
                                 <span class="font-mono text-[11px] text-slate-700 dark:text-slate-300">{{ branch.latitude.toFixed(4) }}, {{ branch.longitude.toFixed(4) }}</span>
                             </div>
@@ -640,6 +656,23 @@ watch(() => props.branches, () => {
                             placeholder="e.g. HRM Surabaya HQ"
                             class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm text-slate-900 dark:text-slate-200 focus:outline-none focus:border-blue-500"
                         />
+                    </div>
+
+                    <!-- Branch Operating Hours (Shift Schedule) -->
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            Branch Operating Schedule
+                            <span class="text-slate-400 font-normal text-[11px]">(Working hours &amp; Lateness rule)</span>
+                        </label>
+                        <select
+                            v-model="form.shift_schedule_id"
+                            class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-900 dark:text-slate-200 focus:outline-none focus:border-blue-500"
+                        >
+                            <option :value="null">Default Schedule (08:00 - 17:00, 15m Grace)</option>
+                            <option v-for="sh in shifts" :key="sh.id" :value="sh.id">
+                                {{ sh.name }} ({{ sh.start_time }} - {{ sh.end_time }}, Grace: {{ sh.grace_minutes }}m)
+                            </option>
+                        </select>
                     </div>
 
                     <!-- Geofence Boundary Selector -->

@@ -14,7 +14,7 @@ class BranchController extends Controller
 {
     public function index(Request $request): Response
     {
-        $branches = Branch::with('checkpoints')->orderBy('id', 'asc')->get()->map(function ($b) {
+        $branches = Branch::with(['checkpoints', 'shiftSchedule'])->orderBy('id', 'asc')->get()->map(function ($b) {
             return [
                 'id' => $b->id,
                 'name' => $b->name,
@@ -26,6 +26,9 @@ class BranchController extends Controller
                 'polygon_coordinates' => $b->polygon_coordinates ? json_decode($b->polygon_coordinates, true) : null,
                 'qr_code_enabled' => (bool)$b->qr_code_enabled,
                 'qr_code_data' => $b->qr_code_data,
+                'shift_schedule_id' => $b->shift_schedule_id,
+                'shift_name' => $b->shiftSchedule?->name,
+                'shift_hours' => $b->shiftSchedule ? "{$b->shiftSchedule->start_time} - {$b->shiftSchedule->end_time}" : null,
                 'timezone_name' => $b->timezone_name ?? 'Asia/Jakarta',
                 'timezone_offset' => $b->timezone_offset ?? 7,
                 'checkpoints' => $b->checkpoints->map(function ($cp) {
@@ -45,8 +48,11 @@ class BranchController extends Controller
             ];
         });
 
+        $shifts = \App\Models\ShiftSchedule::orderBy('name', 'asc')->get(['id', 'name', 'start_time', 'end_time', 'grace_minutes']);
+
         return Inertia::render('Admin/Branches/Index', [
             'branches' => $branches,
+            'shifts' => $shifts,
         ]);
     }
 
@@ -59,6 +65,7 @@ class BranchController extends Controller
             'radius_meters' => 'required|numeric|min:5',
             'geofence_type' => 'required|in:circle,polygon',
             'polygon_coordinates' => 'nullable|string',
+            'shift_schedule_id' => 'nullable|exists:shift_schedules,id',
             'is_active' => 'boolean',
             'qr_code_enabled' => 'boolean',
             'qr_code_data' => 'nullable|string',
@@ -80,6 +87,7 @@ class BranchController extends Controller
             'radius_meters' => 'required|numeric|min:5',
             'geofence_type' => 'required|in:circle,polygon',
             'polygon_coordinates' => 'nullable|string',
+            'shift_schedule_id' => 'nullable|exists:shift_schedules,id',
             'is_active' => 'boolean',
             'qr_code_enabled' => 'boolean',
             'qr_code_data' => 'nullable|string',

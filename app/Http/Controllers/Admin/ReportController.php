@@ -15,6 +15,10 @@ use Illuminate\Support\Facades\DB;
 
 class ReportController extends Controller
 {
+    public function __construct(
+        protected \App\Services\AttendanceProcessorService $attendanceProcessor
+    ) {}
+
     public function index(Request $request): Response
     {
         $viewMode = $request->query('view_mode', 'raw'); // 'raw' | 'daily_summary'
@@ -27,70 +31,58 @@ class ReportController extends Controller
         $likeOp = $driver === 'pgsql' ? 'ilike' : 'like';
 
         if ($viewMode === 'daily_summary') {
-            // Daily Summary View (Grouped by employee & date)
-            $query = PunchLog::join('employees', 'punch_logs.employee_id', '=', 'employees.employee_id')
+            // Fetch distinct employee + date groups
+            $dateCol = "DATE(punch_logs.timestamp)";
+            $groupsQuery = DB::table('punch_logs')
+                ->join('employees', 'punch_logs.employee_id', '=', 'employees.employee_id')
                 ->whereDate('punch_logs.timestamp', '>=', $startDate)
                 ->whereDate('punch_logs.timestamp', '<=', $endDate);
 
             if ($department && $department !== 'all') {
-                $query->where('employees.department', $department);
+                $groupsQuery->where('employees.department', $department);
             }
 
             if ($employeeSearch) {
-                $query->where(function ($q) use ($employeeSearch, $likeOp) {
+                $groupsQuery->where(function ($q) use ($employeeSearch, $likeOp) {
                     $q->where('employees.employee_id', $likeOp, "%{$employeeSearch}%")
                       ->orWhere('employees.full_name', $likeOp, "%{$employeeSearch}%");
                 });
             }
 
-            $dateCol = $driver === 'pgsql' ? "DATE(punch_logs.timestamp)" : "DATE(punch_logs.timestamp)";
-
-            $summaryQuery = $query->select(
+            $distinctDays = $groupsQuery->select(
                 DB::raw("{$dateCol} as punch_date"),
                 'employees.employee_id',
                 'employees.full_name',
-                'employees.department',
-                DB::raw("MIN(CASE WHEN punch_logs.punch_type = 'In' THEN punch_logs.timestamp END) as first_in"),
-                DB::raw("MAX(CASE WHEN punch_logs.punch_type = 'Out' THEN punch_logs.timestamp END) as last_out"),
-                DB::raw("COUNT(punch_logs.id) as total_punches")
+                'employees.department'
             )
             ->groupBy(DB::raw("{$dateCol}"), 'employees.employee_id', 'employees.full_name', 'employees.department')
             ->orderBy(DB::raw("{$dateCol}"), 'desc')
-            ->orderBy('employees.full_name', 'asc');
+            ->orderBy('employees.full_name', 'asc')
+            ->paginate(25);
 
-            $graceMinutes = (int) (AppConfig::where('key', 'late_grace_period_minutes')->value('value') ?? 15);
-            $shiftStart = AppConfig::where('key', 'default_shift_start')->value('value') ?? '08:00';
-            $lateThreshold = Carbon::createFromTimeString($shiftStart)->addMinutes($graceMinutes)->format('H:i');
+            // For each distinct date + employee, fetch all punches and process via AttendanceProcessorService
+            $reports = $distinctDays->through(function ($r) {
+                $punches = PunchLog::with(['branch', 'employee.shiftSchedule', 'employee.group.branch.shiftSchedule'])
+                    ->where('employee_id', $r->employee_id)
+                    ->whereDate('timestamp', $r->punch_date)
+                    ->orderBy('timestamp', 'asc')
+                    ->get();
 
-            $reports = $summaryQuery->paginate(25)->through(function ($r) use ($lateThreshold) {
-                $firstIn = $r->first_in ? Carbon::parse($r->first_in) : null;
-                $lastOut = $r->last_out ? Carbon::parse($r->last_out) : null;
-
-                $workHours = null;
-                if ($firstIn && $lastOut && $lastOut->gt($firstIn)) {
-                    $minutes = $firstIn->diffInMinutes($lastOut);
-                    $hrs = floor($minutes / 60);
-                    $mins = $minutes % 60;
-                    $workHours = sprintf("%02dh %02dm", $hrs, $mins);
-                }
-
-                $status = 'normal';
-                if ($firstIn && $firstIn->format('H:i') > $lateThreshold) {
-                    $status = 'late';
-                } elseif (!$firstIn || !$lastOut) {
-                    $status = 'incomplete';
-                }
+                $employee = $punches->first()?->employee ?? Employee::where('employee_id', $r->employee_id)->first();
+                $processed = $this->attendanceProcessor->processDailyPunches($punches, $employee);
 
                 return [
                     'date' => $r->punch_date,
                     'employee_id' => $r->employee_id,
                     'employee_name' => $r->full_name,
                     'department' => $r->department ?? '-',
-                    'first_in' => $firstIn ? $firstIn->format('H:i:s') : '-',
-                    'last_out' => $lastOut ? $lastOut->format('H:i:s') : '-',
-                    'work_hours' => $workHours ?? '-',
-                    'status' => $status,
-                    'total_punches' => $r->total_punches,
+                    'first_in' => $processed['first_in'] ?? '-',
+                    'last_out' => $processed['last_out'] ?? '-',
+                    'work_hours' => $processed['work_duration'],
+                    'status' => $processed['status'],
+                    'total_punches' => $processed['total_punches'],
+                    'in_device' => $processed['in_device'],
+                    'out_device' => $processed['out_device'],
                 ];
             });
 
@@ -98,7 +90,7 @@ class ReportController extends Controller
             $summariesData = $reports;
         } else {
             // Raw Punch Logs View
-            $query = PunchLog::with('employee')
+            $query = PunchLog::with(['employee', 'branch'])
                 ->whereDate('timestamp', '>=', $startDate)
                 ->whereDate('timestamp', '<=', $endDate)
                 ->orderBy('timestamp', 'desc');
@@ -128,6 +120,10 @@ class ReportController extends Controller
                     'timestamp' => $p->timestamp->format('Y-m-d H:i:s'),
                     'latitude' => $p->latitude,
                     'longitude' => $p->longitude,
+                    'device_sn' => $p->device_sn ?? $p->device_uuid ?? 'N/A',
+                    'device_name' => $p->device_name ?? ($p->latitude ? 'Mobile App' : 'Biometric Terminal'),
+                    'branch_name' => $p->branch?->name ?? 'Default Branch',
+                    'punch_source' => $p->punch_source ?? ($p->latitude ? 'mobile_app' : 'adms_fingerprint'),
                     'biometric_verified' => $p->biometric_verified,
                     'adms_status' => $p->adms_status,
                 ];
@@ -175,49 +171,60 @@ class ReportController extends Controller
             $lateThreshold = Carbon::createFromTimeString($shiftStart)->addMinutes($graceMinutes)->format('H:i');
 
             if ($viewMode === 'daily_summary') {
-                fputcsv($handle, ['Date', 'PIN', 'Name', 'Department', 'Clock In', 'Clock Out', 'Work Duration', 'Status']);
+                fputcsv($handle, ['Date', 'PIN', 'Name', 'Department', 'Clock In', 'In Machine / Branch', 'Clock Out', 'Out Machine / Branch', 'Work Duration', 'Status']);
 
-                $query = PunchLog::join('employees', 'punch_logs.employee_id', '=', 'employees.employee_id')
+                $groupsQuery = DB::table('punch_logs')
+                    ->join('employees', 'punch_logs.employee_id', '=', 'employees.employee_id')
                     ->whereDate('punch_logs.timestamp', '>=', $startDate)
                     ->whereDate('punch_logs.timestamp', '<=', $endDate);
 
                 if ($department && $department !== 'all') {
-                    $query->where('employees.department', $department);
+                    $groupsQuery->where('employees.department', $department);
                 }
 
-                $query->select(
-                    DB::raw("DATE(punch_logs.timestamp) as punch_date"),
+                $dateCol = "DATE(punch_logs.timestamp)";
+                $groupsQuery->select(
+                    DB::raw("{$dateCol} as punch_date"),
                     'employees.employee_id',
                     'employees.full_name',
-                    'employees.department',
-                    DB::raw("MIN(CASE WHEN punch_logs.punch_type = 'In' THEN punch_logs.timestamp END) as first_in"),
-                    DB::raw("MAX(CASE WHEN punch_logs.punch_type = 'Out' THEN punch_logs.timestamp END) as last_out")
+                    'employees.department'
                 )
-                ->groupBy(DB::raw("DATE(punch_logs.timestamp)"), 'employees.employee_id', 'employees.full_name', 'employees.department')
-                ->orderBy(DB::raw("DATE(punch_logs.timestamp)"), 'desc')
-                ->chunk(500, function ($rows) use ($handle, $lateThreshold) {
+                ->groupBy(DB::raw("{$dateCol}"), 'employees.employee_id', 'employees.full_name', 'employees.department')
+                ->orderBy(DB::raw("{$dateCol}"), 'desc')
+                ->orderBy('employees.full_name', 'asc');
+
+                $groupsQuery->chunk(300, function ($rows) use ($handle) {
                     foreach ($rows as $r) {
-                        $firstIn = $r->first_in ? Carbon::parse($r->first_in) : null;
-                        $lastOut = $r->last_out ? Carbon::parse($r->last_out) : null;
-                        $workHours = ($firstIn && $lastOut) ? round($firstIn->diffInMinutes($lastOut) / 60, 2) . ' hrs' : '-';
-                        $status = ($firstIn && $firstIn->format('H:i') > $lateThreshold) ? 'Late' : 'Normal';
+                        $punches = PunchLog::with(['branch', 'employee.shiftSchedule', 'employee.group.branch.shiftSchedule'])
+                            ->where('employee_id', $r->employee_id)
+                            ->whereDate('timestamp', $r->punch_date)
+                            ->orderBy('timestamp', 'asc')
+                            ->get();
+
+                        $employee = $punches->first()?->employee ?? Employee::where('employee_id', $r->employee_id)->first();
+                        $processed = $this->attendanceProcessor->processDailyPunches($punches, $employee);
+
+                        $inMachine = $processed['in_device'] ? "{$processed['in_device']['device_name']} ({$processed['in_device']['branch_name']})" : '-';
+                        $outMachine = $processed['out_device'] ? "{$processed['out_device']['device_name']} ({$processed['out_device']['branch_name']})" : '-';
 
                         fputcsv($handle, [
                             $r->punch_date,
                             $r->employee_id,
                             $r->full_name,
-                            $r->department,
-                            $firstIn ? $firstIn->format('H:i:s') : '-',
-                            $lastOut ? $lastOut->format('H:i:s') : '-',
-                            $workHours,
-                            $status,
+                            $r->department ?? '-',
+                            $processed['first_in'] ?? '-',
+                            $inMachine,
+                            $processed['last_out'] ?? '-',
+                            $outMachine,
+                            $processed['work_duration'],
+                            ucfirst($processed['status']),
                         ]);
                     }
                 });
             } else {
-                fputcsv($handle, ['ID', 'PIN', 'Name', 'Department', 'Type', 'Date & Time', 'Latitude', 'Longitude', 'Biometric', 'ADMS Status']);
+                fputcsv($handle, ['ID', 'PIN', 'Name', 'Department', 'Type', 'Date & Time', 'Device SN', 'Machine / Source', 'Branch', 'Latitude', 'Longitude', 'Biometric', 'ADMS Status']);
 
-                $query = PunchLog::with('employee')
+                $query = PunchLog::with(['employee', 'branch'])
                     ->whereDate('timestamp', '>=', $startDate)
                     ->whereDate('timestamp', '<=', $endDate)
                     ->orderBy('timestamp', 'desc');
@@ -237,6 +244,9 @@ class ReportController extends Controller
                             $r->employee?->department ?? '',
                             $r->punch_type,
                             $r->timestamp->format('Y-m-d H:i:s'),
+                            $r->device_sn ?? $r->device_uuid ?? 'N/A',
+                            $r->device_name ?? ($r->latitude ? 'Mobile App' : 'Biometric Terminal'),
+                            $r->branch?->name ?? 'Default Branch',
                             $r->latitude,
                             $r->longitude,
                             $r->biometric_verified ? 'Yes' : 'No',

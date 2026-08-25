@@ -240,9 +240,23 @@ const downloadCsv = () => {
                             <div class="text-xs text-slate-500 font-mono">PIN: {{ s.employee_id }}</div>
                         </td>
                         <td class="px-5 py-3.5 text-xs text-slate-400">{{ s.department }}</td>
-                        <td class="px-5 py-3.5 font-mono text-xs font-semibold text-emerald-400">{{ s.first_in }}</td>
-                        <td class="px-5 py-3.5 font-mono text-xs font-semibold text-indigo-400">{{ s.last_out }}</td>
-                        <td class="px-5 py-3.5 font-mono text-xs text-slate-200">{{ s.work_hours }}</td>
+                        <td class="px-5 py-3.5">
+                            <div class="font-mono text-xs font-semibold text-emerald-400">{{ s.first_in }}</div>
+                            <div v-if="s.in_device" class="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5">
+                                <span v-if="s.in_device.source === 'mobile_app'" class="text-blue-400 font-medium">📱 Mobile</span>
+                                <span v-else class="text-amber-400 font-medium">🏢 {{ s.in_device.device_name }}</span>
+                                <span class="text-slate-500">• {{ s.in_device.branch_name }}</span>
+                            </div>
+                        </td>
+                        <td class="px-5 py-3.5">
+                            <div class="font-mono text-xs font-semibold text-indigo-400">{{ s.last_out }}</div>
+                            <div v-if="s.out_device" class="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5">
+                                <span v-if="s.out_device.source === 'mobile_app'" class="text-blue-400 font-medium">📱 Mobile</span>
+                                <span v-else class="text-amber-400 font-medium">🏢 {{ s.out_device.device_name }}</span>
+                                <span class="text-slate-500">• {{ s.out_device.branch_name }}</span>
+                            </div>
+                        </td>
+                        <td class="px-5 py-3.5 font-mono text-xs text-slate-200 font-semibold">{{ s.work_hours }}</td>
                         <td class="px-5 py-3.5 text-xs">
                             <span v-if="s.status === 'normal'" class="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                                 On Time
@@ -281,6 +295,7 @@ const downloadCsv = () => {
                         <th class="px-5 py-3.5">Department</th>
                         <th class="px-5 py-3.5">Type</th>
                         <th class="px-5 py-3.5">Timestamp</th>
+                        <th class="px-5 py-3.5">Device &amp; Branch</th>
                         <th class="px-5 py-3.5">Biometric</th>
                         <th class="px-5 py-3.5">ADMS Sync</th>
                     </tr>
@@ -300,6 +315,14 @@ const downloadCsv = () => {
                         </td>
                         <td class="px-5 py-3.5 text-xs font-mono text-slate-700 dark:text-slate-300">{{ p.timestamp }}</td>
                         <td class="px-5 py-3.5 text-xs">
+                            <div class="flex items-center gap-1.5">
+                                <span v-if="p.punch_source === 'mobile_app'" class="px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 text-[11px] font-medium">📱 Mobile</span>
+                                <span v-else class="px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 text-[11px] font-medium">🏢 Fingerprint</span>
+                                <span class="text-slate-300 font-medium">{{ p.branch_name }}</span>
+                            </div>
+                            <div class="text-[10px] text-slate-500 font-mono mt-0.5">{{ p.device_name }} ({{ p.device_sn }})</div>
+                        </td>
+                        <td class="px-5 py-3.5 text-xs">
                             <span v-if="p.biometric_verified" class="text-emerald-600 dark:text-emerald-400 font-semibold">Verified</span>
                             <span v-else class="text-slate-500">Standard</span>
                         </td>
@@ -310,7 +333,7 @@ const downloadCsv = () => {
                         </td>
                     </tr>
                     <tr v-if="punches.data.length === 0">
-                        <td colspan="7" class="px-5 py-8 text-center text-slate-500 text-xs">
+                        <td colspan="8" class="px-5 py-8 text-center text-slate-500 text-xs">
                             No punch logs found for this period.
                         </td>
                     </tr>

@@ -15,12 +15,16 @@ class PunchLog extends Model
     protected $fillable = [
         'employee_id',
         'device_uuid',
+        'device_sn',
+        'device_name',
+        'branch_id',
         'timestamp',
         'latitude',
         'longitude',
         'is_mock_location',
         'biometric_verified',
         'punch_type',
+        'punch_source',
         'tz_offset_minutes',
         'adms_status',
         'client_punch_id',
@@ -50,6 +54,11 @@ class PunchLog extends Model
     public function employee()
     {
         return $this->belongsTo(Employee::class, 'employee_id', 'employee_id');
+    }
+
+    public function branch()
+    {
+        return $this->belongsTo(Branch::class, 'branch_id');
     }
 
     public function corrections()

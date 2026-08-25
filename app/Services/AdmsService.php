@@ -203,6 +203,209 @@ class AdmsService
     }
 
     /**
+     * Pull biometric punch records (ATTLOG) from ADMS server and store them locally.
+     * Records Device SN, Machine Name, and maps to the appropriate Branch.
+     */
+    public function syncPunchesFromAdms(?string $startDate = null, ?string $endDate = null): array
+    {
+        try {
+            $creds = AdmsCredential::where('is_active', true)->first();
+            if (!$creds || empty($creds->url) || empty($creds->username) || empty($creds->password)) {
+                throw new \Exception('ADMS credentials not configured or inactive.');
+            }
+
+            $admsUrl = rtrim($creds->url, '/');
+            $cookieJar = new \GuzzleHttp\Cookie\CookieJar();
+
+            // 1. Get CSRF Token
+            $loginPageRes = Http::withOptions(['cookies' => $cookieJar, 'timeout' => 20])
+                ->get("{$admsUrl}/iclock/accounts/login/");
+
+            $csrfToken = null;
+            if (preg_match('/name=["\']csrfmiddlewaretoken["\']\s+value=["\']([^"\']+)["\']/', $loginPageRes->body(), $matches)) {
+                $csrfToken = $matches[1];
+            } else {
+                foreach ($cookieJar->toArray() as $c) {
+                    if ($c['Name'] === 'csrftoken') {
+                        $csrfToken = $c['Value'];
+                        break;
+                    }
+                }
+            }
+
+            if (!$csrfToken) {
+                throw new \Exception('Failed to obtain CSRF token from ADMS login page.');
+            }
+
+            // 2. Perform Login
+            $loginRes = Http::asForm()
+                ->withOptions(['cookies' => $cookieJar, 'timeout' => 25, 'allow_redirects' => true])
+                ->withHeaders(['Referer' => "{$admsUrl}/iclock/accounts/login/"])
+                ->post("{$admsUrl}/iclock/accounts/login/", [
+                    'username' => $creds->username,
+                    'password' => $creds->password,
+                    'csrfmiddlewaretoken' => $csrfToken,
+                ]);
+
+            if (!$loginRes->successful() && $loginRes->status() !== 302) {
+                throw new \Exception("ADMS authentication failed with HTTP {$loginRes->status()}");
+            }
+
+            // 3. Fetch attlog data
+            $url = "{$admsUrl}/iclock/data/attlog/?p=1&l=5000";
+            if ($startDate) {
+                $url .= "&StartTime=" . urlencode($startDate);
+            }
+            if ($endDate) {
+                $url .= "&EndTime=" . urlencode($endDate);
+            }
+
+            $attlogRes = Http::withOptions(['cookies' => $cookieJar, 'timeout' => 45])
+                ->get($url);
+
+            if (!$attlogRes->successful()) {
+                throw new \Exception("Failed to fetch attlog from ADMS: HTTP {$attlogRes->status()}");
+            }
+
+            $html = $attlogRes->body();
+
+            // 4. Extract data array
+            if (!preg_match('/data=\[(.*?)\];/s', $html, $matches)) {
+                return [
+                    'success' => true,
+                    'message' => 'No punch log data array found in ADMS response.',
+                    'synced' => 0,
+                ];
+            }
+
+            $dataStr = '[' . $matches[1] . ']';
+            $dataStr = str_replace('deviceText', '""', $dataStr);
+            $dataStr = preg_replace('/,\s*\]/', ']', $dataStr);
+
+            $rows = json_decode($dataStr, true);
+            if (!is_array($rows)) {
+                throw new \Exception('Failed to parse ATTLOG JSON data from ADMS.');
+            }
+
+            // Cache known branches by name/keywords for automatic branch matching
+            $branches = \App\Models\Branch::where('is_active', true)->get();
+
+            $syncedCount = 0;
+            $now = Carbon::now();
+
+            foreach ($rows as $row) {
+                if (!is_array($row) || count($row) < 3) {
+                    continue;
+                }
+
+                // Identify PIN, timestamp, and Device info across standard ZKTeco attlog array formats
+                $pin = null;
+                $timestamp = null;
+                $state = 0; // 0 = In, 1 = Out
+                $deviceSn = null;
+                $deviceName = null;
+
+                // Look for timestamp (YYYY-MM-DD HH:MM:SS) in row items
+                foreach ($row as $idx => $val) {
+                    $valStr = trim((string)$val);
+                    if (preg_match('/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(:\d{2})?$/', $valStr)) {
+                        $timestamp = Carbon::parse($valStr);
+                        // The PIN is typically immediately before the timestamp
+                        if ($idx > 0 && !empty($row[$idx - 1])) {
+                            $pin = trim((string)$row[$idx - 1]);
+                        }
+                    }
+                }
+
+                // Fallback column positions if regex scan missed
+                if (!$pin) {
+                    $pin = trim((string)($row[1] ?? $row[0] ?? ''));
+                }
+                if (!$timestamp && !empty($row[2])) {
+                    try {
+                        $timestamp = Carbon::parse(trim((string)$row[2]));
+                    } catch (\Throwable) {}
+                }
+
+                // Guard: validate PIN and timestamp
+                if (
+                    empty($pin) ||
+                    in_array(strtolower($pin), ['none', 'null', '-', '--', 'undefined', 'n/a']) ||
+                    !preg_match('/^[0-9A-Za-z_-]+$/', $pin) ||
+                    !$timestamp
+                ) {
+                    continue;
+                }
+
+                // Extract Device SN / Device Name if available
+                if (isset($row[5]) && is_string($row[5]) && !empty(trim($row[5]))) {
+                    $deviceSn = trim($row[5]);
+                }
+                if (isset($row[6]) && is_string($row[6]) && !empty(trim($row[6]))) {
+                    $deviceName = trim($row[6]);
+                }
+
+                // Resolve branch from device SN or name if available
+                $branchId = null;
+                if ($deviceSn || $deviceName) {
+                    $searchTarget = strtolower(($deviceSn ?? '') . ' ' . ($deviceName ?? ''));
+                    foreach ($branches as $branch) {
+                        if (str_contains($searchTarget, strtolower($branch->name))) {
+                            $branchId = $branch->id;
+                            break;
+                        }
+                    }
+                }
+
+                // Fallback to employee's assigned branch if device didn't match
+                if (!$branchId) {
+                    $emp = \App\Models\Employee::with('group.branch')->where('employee_id', $pin)->first();
+                    $branchId = $emp?->group?->branch_id ?? $branches->first()?->id;
+                }
+
+                $punchType = ($state == 1) ? 'Out' : 'In';
+
+                // Idempotent upsert matching employee_id and exact timestamp
+                PunchLog::updateOrCreate(
+                    [
+                        'employee_id' => $pin,
+                        'timestamp' => $timestamp,
+                    ],
+                    [
+                        'punch_type' => $punchType,
+                        'punch_source' => 'adms_fingerprint',
+                        'device_sn' => $deviceSn ?? 'ADMS_DEVICE',
+                        'device_name' => $deviceName ?? 'Biometric Terminal',
+                        'branch_id' => $branchId,
+                        'biometric_verified' => true,
+                        'adms_status' => 'uploaded',
+                        'gps_time_validated' => true,
+                        'tz_offset_minutes' => 420,
+                    ]
+                );
+
+                $syncedCount++;
+            }
+
+            Log::info("Synced {$syncedCount} punch logs from ADMS.");
+
+            return [
+                'success' => true,
+                'message' => "Successfully synced {$syncedCount} punch logs from ADMS.",
+                'synced' => $syncedCount,
+            ];
+        } catch (\Throwable $e) {
+            $msg = $e->getMessage();
+            Log::error("Failed to sync punches from ADMS: {$msg}");
+            return [
+                'success' => false,
+                'message' => "Failed to sync punches from ADMS: {$msg}",
+                'synced' => 0,
+            ];
+        }
+    }
+
+    /**
      * Push a single punch log to ADMS server and mark uploaded.
      */
     public function pushPunchLog(PunchLog $punch): bool
