@@ -251,8 +251,8 @@ class AdmsService
                 throw new \Exception("ADMS authentication failed with HTTP {$loginRes->status()}");
             }
 
-            // 3. Fetch attlog data
-            $url = "{$admsUrl}/iclock/data/attlog/?p=1&l=5000";
+            // 3. Fetch transaction (punch) data
+            $url = "{$admsUrl}/iclock/data/transaction/?p=1&l=5000";
             if ($startDate) {
                 $url .= "&StartTime=" . urlencode($startDate);
             }
@@ -264,7 +264,7 @@ class AdmsService
                 ->get($url);
 
             if (!$attlogRes->successful()) {
-                throw new \Exception("Failed to fetch attlog from ADMS: HTTP {$attlogRes->status()}");
+                throw new \Exception("Failed to fetch transactions from ADMS: HTTP {$attlogRes->status()}");
             }
 
             $html = $attlogRes->body();
@@ -273,7 +273,7 @@ class AdmsService
             if (!preg_match('/data=\[(.*?)\];/s', $html, $matches)) {
                 return [
                     'success' => true,
-                    'message' => 'No punch log data array found in ADMS response.',
+                    'message' => 'No punch log data array found in ADMS transaction response.',
                     'synced' => 0,
                 ];
             }
@@ -284,52 +284,51 @@ class AdmsService
 
             $rows = json_decode($dataStr, true);
             if (!is_array($rows)) {
-                throw new \Exception('Failed to parse ATTLOG JSON data from ADMS.');
+                throw new \Exception('Failed to parse transaction JSON data from ADMS.');
             }
 
-            // Cache known branches by name/keywords for automatic branch matching
+            // Cache known branches
             $branches = \App\Models\Branch::where('is_active', true)->get();
 
             $syncedCount = 0;
             $now = Carbon::now();
 
             foreach ($rows as $row) {
-                if (!is_array($row) || count($row) < 3) {
+                if (!is_array($row) || count($row) < 4) {
                     continue;
                 }
 
-                // Identify PIN, timestamp, and Device info across standard ZKTeco attlog array formats
-                $pin = null;
+                // ADMS transaction row structure:
+                // [id, pin, name, "DD/MM/YY HH:MM:SS", "Check in", "Fingerprint", "0", "0", "SN(IP)", ""]
+                $pin = trim((string)($row[1] ?? ''));
+                $name = trim((string)($row[2] ?? ''));
+                $timeRaw = trim((string)($row[3] ?? ''));
+                $typeStr = trim((string)($row[4] ?? 'Check in'));
+                $verifyStr = trim((string)($row[5] ?? 'Fingerprint'));
+                $deviceRaw = trim((string)($row[8] ?? ''));
+
+                if (empty($pin) || empty($timeRaw)) {
+                    continue;
+                }
+
+                // Parse Timestamp (support DD/MM/YY HH:MM:SS and YYYY-MM-DD HH:MM:SS)
                 $timestamp = null;
-                $state = 0; // 0 = In, 1 = Out
-                $deviceSn = null;
-                $deviceName = null;
-
-                // Look for timestamp (YYYY-MM-DD HH:MM:SS) in row items
-                foreach ($row as $idx => $val) {
-                    $valStr = trim((string)$val);
-                    if (preg_match('/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(:\d{2})?$/', $valStr)) {
-                        $timestamp = Carbon::parse($valStr);
-                        // The PIN is typically immediately before the timestamp
-                        if ($idx > 0 && !empty($row[$idx - 1])) {
-                            $pin = trim((string)$row[$idx - 1]);
-                        }
-                    }
-                }
-
-                // Fallback column positions if regex scan missed
-                if (!$pin) {
-                    $pin = trim((string)($row[1] ?? $row[0] ?? ''));
-                }
-                if (!$timestamp && !empty($row[2])) {
+                if (preg_match('/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s+(\d{1,2}:\d{2}(?::\d{2})?)$/', $timeRaw, $tm)) {
+                    $day = str_pad($tm[1], 2, '0', STR_PAD_LEFT);
+                    $month = str_pad($tm[2], 2, '0', STR_PAD_LEFT);
+                    $year = strlen($tm[3]) === 2 ? '20' . $tm[3] : $tm[3];
+                    $time = $tm[4];
+                    $timestamp = Carbon::parse("{$year}-{$month}-{$day} {$time}");
+                } else {
                     try {
-                        $timestamp = Carbon::parse(trim((string)$row[2]));
-                    } catch (\Throwable) {}
+                        $timestamp = Carbon::parse($timeRaw);
+                    } catch (\Throwable) {
+                        continue;
+                    }
                 }
 
                 // Guard: validate PIN and timestamp
                 if (
-                    empty($pin) ||
                     in_array(strtolower($pin), ['none', 'null', '-', '--', 'undefined', 'n/a']) ||
                     !preg_match('/^[0-9A-Za-z_-]+$/', $pin) ||
                     !$timestamp
@@ -337,18 +336,22 @@ class AdmsService
                     continue;
                 }
 
-                // Extract Device SN / Device Name if available
-                if (isset($row[5]) && is_string($row[5]) && !empty(trim($row[5]))) {
-                    $deviceSn = trim($row[5]);
-                }
-                if (isset($row[6]) && is_string($row[6]) && !empty(trim($row[6]))) {
-                    $deviceName = trim($row[6]);
+                // Extract Device SN and Device IP
+                $deviceSn = null;
+                $deviceIp = null;
+                if (!empty($deviceRaw)) {
+                    if (preg_match('/^([^\(]+)(?:\((.*?)\))?$/', $deviceRaw, $dm)) {
+                        $deviceSn = trim($dm[1]);
+                        $deviceIp = trim($dm[2] ?? '');
+                    } else {
+                        $deviceSn = $deviceRaw;
+                    }
                 }
 
-                // Resolve branch from device SN or name if available
+                // Resolve branch from device SN or IP or Name
                 $branchId = null;
-                if ($deviceSn || $deviceName) {
-                    $searchTarget = strtolower(($deviceSn ?? '') . ' ' . ($deviceName ?? ''));
+                if ($deviceSn || $deviceIp) {
+                    $searchTarget = strtolower(($deviceSn ?? '') . ' ' . ($deviceIp ?? ''));
                     foreach ($branches as $branch) {
                         if (str_contains($searchTarget, strtolower($branch->name))) {
                             $branchId = $branch->id;
@@ -363,7 +366,8 @@ class AdmsService
                     $branchId = $emp?->group?->branch_id ?? $branches->first()?->id;
                 }
 
-                $punchType = ($state == 1) ? 'Out' : 'In';
+                $punchType = str_contains(strtolower($typeStr), 'out') ? 'Out' : 'In';
+                $isBiometric = !str_contains(strtolower($verifyStr), 'password');
 
                 // Idempotent upsert matching employee_id and exact timestamp
                 PunchLog::updateOrCreate(
@@ -375,9 +379,9 @@ class AdmsService
                         'punch_type' => $punchType,
                         'punch_source' => 'adms_fingerprint',
                         'device_sn' => $deviceSn ?? 'ADMS_DEVICE',
-                        'device_name' => $deviceName ?? 'Biometric Terminal',
+                        'device_name' => $deviceIp ? "Fingerprint Terminal ({$deviceIp})" : ($deviceSn ?? 'Fingerprint Terminal'),
                         'branch_id' => $branchId,
-                        'biometric_verified' => true,
+                        'biometric_verified' => $isBiometric,
                         'adms_status' => 'uploaded',
                         'gps_time_validated' => true,
                         'tz_offset_minutes' => 420,
