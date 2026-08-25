@@ -52,6 +52,11 @@ Route::prefix('admin')->middleware(['auth'])->group(function () {
     Route::delete('/devices/{device}', [DeviceController::class, 'destroy'])->name('admin.devices.destroy');
     Route::post('/devices/generate-qr', [DeviceController::class, 'generateQr'])->name('admin.devices.generate-qr');
 
+    // Biometric & Fingerprint Terminals
+    Route::post('/devices/terminals', [DeviceController::class, 'storeTerminal'])->name('admin.devices.terminals.store');
+    Route::put('/devices/terminals/{terminal}', [DeviceController::class, 'updateTerminal'])->name('admin.devices.terminals.update');
+    Route::delete('/devices/terminals/{terminal}', [DeviceController::class, 'destroyTerminal'])->name('admin.devices.terminals.destroy');
+
     // Employees & Shifts
     Route::get('/employees', [EmployeeController::class, 'index'])->name('admin.employees');
     Route::post('/employees', [EmployeeController::class, 'store'])->name('admin.employees.store');

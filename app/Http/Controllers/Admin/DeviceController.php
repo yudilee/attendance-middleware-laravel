@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
 use App\Models\DeviceBinding;
+use App\Models\BiometricTerminal;
 use App\Models\Employee;
 use App\Models\Branch;
 use App\Models\ApiKey;
@@ -59,16 +60,76 @@ class DeviceController extends Controller
             ];
         });
 
+        $terminals = BiometricTerminal::with('branch')
+            ->orderBy('last_activity_at', 'desc')
+            ->get()
+            ->map(function ($t) {
+                return [
+                    'id' => $t->id,
+                    'device_sn' => $t->device_sn,
+                    'device_name' => $t->device_name,
+                    'ip_address' => $t->ip_address,
+                    'branch_id' => $t->branch_id,
+                    'branch_name' => $t->branch?->name,
+                    'is_active' => $t->is_active,
+                    'last_activity_at' => $t->last_activity_at?->format('Y-m-d H:i:s'),
+                ];
+            });
+
         $branches = Branch::where('is_active', true)->get(['id', 'name']);
 
         return Inertia::render('Admin/Devices/Index', [
             'devices' => $devices,
+            'terminals' => $terminals,
             'branches' => $branches,
             'filters' => [
                 'status' => $statusFilter ?? 'all',
                 'search' => $search ?? '',
             ],
         ]);
+    }
+
+    public function storeTerminal(Request $request)
+    {
+        $validated = $request->validate([
+            'device_sn' => 'required|string|max:100|unique:biometric_terminals,device_sn',
+            'device_name' => 'nullable|string|max:150',
+            'ip_address' => 'nullable|string|max:50',
+            'branch_id' => 'nullable|exists:branches,id',
+            'is_active' => 'boolean',
+        ]);
+
+        BiometricTerminal::create($validated);
+
+        return back()->with('success', 'Biometric terminal registered successfully.');
+    }
+
+    public function updateTerminal(Request $request, BiometricTerminal $terminal)
+    {
+        $validated = $request->validate([
+            'device_name' => 'nullable|string|max:150',
+            'ip_address' => 'nullable|string|max:50',
+            'branch_id' => 'nullable|exists:branches,id',
+            'is_active' => 'boolean',
+        ]);
+
+        $terminal->update($validated);
+
+        // Retroactively update recent punch logs from this device to reflect the branch
+        if (isset($validated['branch_id'])) {
+            \App\Models\PunchLog::where('device_sn', $terminal->device_sn)
+                ->where('timestamp', '>=', Carbon::now()->subDays(30))
+                ->update(['branch_id' => $validated['branch_id']]);
+        }
+
+        return back()->with('success', "Terminal {$terminal->device_sn} updated.");
+    }
+
+    public function destroyTerminal(BiometricTerminal $terminal)
+    {
+        $terminal->delete();
+
+        return back()->with('success', "Biometric terminal {$terminal->device_sn} removed.");
     }
 
     public function approve(DeviceBinding $device)

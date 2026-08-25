@@ -287,8 +287,9 @@ class AdmsService
 
             $rows = $allRows;
 
-            // Cache known branches
+            // Cache known branches & biometric terminals
             $branches = \App\Models\Branch::where('is_active', true)->get();
+            $terminals = \App\Models\BiometricTerminal::all()->keyBy('device_sn');
 
             $syncedCount = 0;
             $now = Carbon::now();
@@ -348,9 +349,30 @@ class AdmsService
                     }
                 }
 
-                // Resolve branch from device SN or IP or Name
+                // Auto-discover and register/update BiometricTerminal
                 $branchId = null;
-                if ($deviceSn || $deviceIp) {
+                if ($deviceSn) {
+                    if (isset($terminals[$deviceSn])) {
+                        $term = $terminals[$deviceSn];
+                        $branchId = $term->branch_id;
+                    } else {
+                        // First-time discovered terminal - auto create record
+                        $term = \App\Models\BiometricTerminal::firstOrCreate(
+                            ['device_sn' => $deviceSn],
+                            [
+                                'device_name' => $deviceIp ? "Fingerprint Terminal ({$deviceIp})" : "Terminal {$deviceSn}",
+                                'ip_address' => $deviceIp,
+                                'is_active' => true,
+                                'last_activity_at' => $timestamp ?? $now,
+                            ]
+                        );
+                        $terminals[$deviceSn] = $term;
+                        $branchId = $term->branch_id;
+                    }
+                }
+
+                // If terminal does not have an explicit branch assignment, attempt keyword match
+                if (!$branchId && ($deviceSn || $deviceIp)) {
                     $searchTarget = strtolower(($deviceSn ?? '') . ' ' . ($deviceIp ?? ''));
                     foreach ($branches as $branch) {
                         if (str_contains($searchTarget, strtolower($branch->name))) {
@@ -368,6 +390,11 @@ class AdmsService
 
                 $punchType = str_contains(strtolower($typeStr), 'out') ? 'Out' : 'In';
                 $isBiometric = !str_contains(strtolower($verifyStr), 'password');
+
+                $deviceName = $deviceIp ? "Fingerprint Terminal ({$deviceIp})" : ($deviceSn ?? 'Fingerprint Terminal');
+                if (isset($terminals[$deviceSn]) && !empty($terminals[$deviceSn]->device_name)) {
+                    $deviceName = $terminals[$deviceSn]->device_name;
+                }
 
                 // Idempotent upsert matching employee_id and exact timestamp
                 PunchLog::updateOrCreate(

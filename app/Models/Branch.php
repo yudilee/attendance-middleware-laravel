@@ -71,4 +71,9 @@ class Branch extends Model
             'binding_id'
         )->withPivot('assigned_at');
     }
+
+    public function biometricTerminals()
+    {
+        return $this->hasMany(BiometricTerminal::class, 'branch_id');
+    }
 }
