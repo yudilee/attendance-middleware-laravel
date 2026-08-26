@@ -287,9 +287,9 @@ const initVisualizerMap = () => {
 
     L.control.zoom({ position: 'topright' }).addTo(visualizerMap);
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
-        subdomains: 'abcd',
+        subdomains: 'abc',
     }).addTo(visualizerMap);
 
     renderVisualizerBranches();
@@ -476,9 +476,9 @@ const initEditorMap = () => {
 
     L.control.zoom({ position: 'topright' }).addTo(editorMap);
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
-        subdomains: 'abcd',
+        subdomains: 'abc',
     }).addTo(editorMap);
 
     // Geoman Toolbar Controls
