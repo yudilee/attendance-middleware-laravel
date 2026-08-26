@@ -15,7 +15,14 @@ import {
     CheckCircle2,
     RotateCcw,
     Sliders,
-    Sparkles
+    Sparkles,
+    Search,
+    Loader2,
+    X,
+    Crosshair,
+    Navigation,
+    Clock,
+    ClipboardPaste
 } from 'lucide-vue-next';
 
 import 'leaflet/dist/leaflet.css';
@@ -54,6 +61,159 @@ let editorCircle = null;
 let editorPolygon = null;
 const isEditing = ref(false);
 const isDrawingPolygon = ref(false);
+
+// Map Search & Coordinate Parsing State
+const searchQuery = ref('');
+const searchResults = ref([]);
+const isSearching = ref(false);
+const showSearchResults = ref(false);
+let searchDebounce = null;
+const pasteCoordinateInput = ref('');
+
+// Parse coordinates from text (supports Decimal Degrees and DMS Degrees Minutes Seconds)
+const parseCoordinates = (input) => {
+    if (!input || typeof input !== 'string') return null;
+    const str = input.trim();
+
+    // 1. Decimal format: e.g. "-2.634581, 121.107485" or "-2.634581 121.107485"
+    const decimalMatch = str.match(/^(-?\d+(?:\.\d+)?)[,\s]+(-?\d+(?:\.\d+)?)$/);
+    if (decimalMatch) {
+        const lat = parseFloat(decimalMatch[1]);
+        const lng = parseFloat(decimalMatch[2]);
+        if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+            return {
+                lat: parseFloat(lat.toFixed(6)),
+                lng: parseFloat(lng.toFixed(6)),
+                title: 'Parsed GPS Coordinates',
+                address: `Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}`,
+                isCoordinate: true
+            };
+        }
+    }
+
+    // 2. DMS format: e.g. 2°38'04.5"S 121°06'27.0"E or 2°38'4.5" S, 121°6'27" E
+    const dmsRegex = /(\d+)[°\s]+(\d+)['\s]+(\d+(?:\.\d+)?)["]?\s*([NSEWnsew])[,\s]+(\d+)[°\s]+(\d+)['\s]+(\d+(?:\.\d+)?)["]?\s*([NSEWnsew])/i;
+    const dmsMatch = str.match(dmsRegex);
+    if (dmsMatch) {
+        const latDeg = parseFloat(dmsMatch[1]);
+        const latMin = parseFloat(dmsMatch[2]);
+        const latSec = parseFloat(dmsMatch[3]);
+        const latDir = dmsMatch[4].toUpperCase();
+
+        const lngDeg = parseFloat(dmsMatch[5]);
+        const lngMin = parseFloat(dmsMatch[6]);
+        const lngSec = parseFloat(dmsMatch[7]);
+        const lngDir = dmsMatch[8].toUpperCase();
+
+        let lat = latDeg + (latMin / 60) + (latSec / 3600);
+        if (latDir === 'S') lat = -lat;
+
+        let lng = lngDeg + (lngMin / 60) + (lngSec / 3600);
+        if (lngDir === 'W') lng = -lng;
+
+        if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+            return {
+                lat: parseFloat(lat.toFixed(6)),
+                lng: parseFloat(lng.toFixed(6)),
+                title: 'DMS Converted Coordinates',
+                address: `Lat: ${lat.toFixed(6)} (${dmsMatch[1]}°${dmsMatch[2]}'${dmsMatch[3]}"${latDir}), Lng: ${lng.toFixed(6)} (${dmsMatch[5]}°${dmsMatch[6]}'${dmsMatch[7]}"${lngDir})`,
+                isCoordinate: true
+            };
+        }
+    }
+
+    return null;
+};
+
+const onSearchInput = () => {
+    clearTimeout(searchDebounce);
+    const query = searchQuery.value.trim();
+
+    if (!query) {
+        searchResults.value = [];
+        showSearchResults.value = false;
+        return;
+    }
+
+    // Direct coordinates check (DMS or Decimal)
+    const directCoords = parseCoordinates(query);
+    if (directCoords) {
+        searchResults.value = [directCoords];
+        showSearchResults.value = true;
+        return;
+    }
+
+    searchDebounce = setTimeout(async () => {
+        isSearching.value = true;
+        try {
+            const res = await fetch(
+                `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=6&addressdetails=1&countrycodes=id`,
+                { headers: { 'Accept-Language': 'id,en' } }
+            );
+            const data = await res.json();
+            searchResults.value = data.map(item => ({
+                lat: parseFloat(parseFloat(item.lat).toFixed(6)),
+                lng: parseFloat(parseFloat(item.lon).toFixed(6)),
+                title: item.name || item.display_name.split(',')[0],
+                address: item.display_name,
+                isCoordinate: false
+            }));
+            showSearchResults.value = searchResults.value.length > 0;
+        } catch (e) {
+            console.error('Geocoding search error:', e);
+        } finally {
+            isSearching.value = false;
+        }
+    }, 300);
+};
+
+const selectSearchResult = (item) => {
+    searchQuery.value = item.title;
+    showSearchResults.value = false;
+
+    if (currentView.value === 'editor') {
+        form.value.latitude = item.lat;
+        form.value.longitude = item.lng;
+        updateEditorOverlays();
+        if (editorMap) {
+            editorMap.flyTo([item.lat, item.lng], 17, { duration: 1.2 });
+        }
+    } else if (currentView.value === 'visualizer') {
+        if (visualizerMap) {
+            visualizerMap.flyTo([item.lat, item.lng], 16, { duration: 1.2 });
+        }
+    }
+};
+
+const clearSearch = () => {
+    searchQuery.value = '';
+    searchResults.value = [];
+    showSearchResults.value = false;
+};
+
+const applyPastedCoordinates = () => {
+    const parsed = parseCoordinates(pasteCoordinateInput.value);
+    if (parsed) {
+        form.value.latitude = parsed.lat;
+        form.value.longitude = parsed.lng;
+        updateEditorOverlays();
+        if (editorMap) {
+            editorMap.flyTo([parsed.lat, parsed.lng], 17, { duration: 1.2 });
+        }
+        pasteCoordinateInput.value = '';
+    } else {
+        alert('Could not parse coordinates. Please enter format like: "-2.634581, 121.107485" or DMS "2°38\'04.5\\"S 121°06\'27.0\\"E"');
+    }
+};
+
+const onCoordinateChange = () => {
+    if (form.value.latitude && form.value.longitude) {
+        updateEditorOverlays();
+        if (editorMap) {
+            editorMap.panTo([form.value.latitude, form.value.longitude]);
+        }
+    }
+};
 
 // Active Branch Form
 const form = ref({
@@ -616,6 +776,7 @@ watch(() => props.branches, () => {
 
                 <!-- Right: Read-Only Leaflet Map (8 Cols) -->
                 <div class="lg:col-span-8 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-xl relative flex flex-col">
+                    <!-- Layer Legends -->
                     <div class="absolute top-4 left-4 z-20 flex items-center gap-2 bg-white/95 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800/90 backdrop-blur-md px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-800 dark:text-slate-200 shadow-lg">
                         <Layers class="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
                         <span>Live Branch Geofences</span>
@@ -623,6 +784,57 @@ watch(() => props.branches, () => {
                         <span class="text-blue-600 dark:text-blue-400 flex items-center gap-1">⭕ Circle</span>
                         <span class="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">⬡ Polygon</span>
                         <span class="text-amber-600 dark:text-amber-400 flex items-center gap-1">🟡 Checkpoint</span>
+                    </div>
+
+                    <!-- Visualizer Map Location Search Bar -->
+                    <div class="absolute top-4 right-4 z-20 w-64 sm:w-72">
+                        <div class="relative">
+                            <div class="relative flex items-center">
+                                <Search class="absolute left-3 w-3.5 h-3.5 text-slate-400" />
+                                <input
+                                    v-model="searchQuery"
+                                    @input="onSearchInput"
+                                    @focus="if (searchResults.length > 0) showSearchResults = true;"
+                                    type="text"
+                                    placeholder="Search location or paste GPS..."
+                                    class="w-full pl-8 pr-7 py-1.5 bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 backdrop-blur-md rounded-xl text-xs text-slate-900 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-lg"
+                                />
+                                <button
+                                    v-if="searchQuery"
+                                    @click="clearSearch"
+                                    type="button"
+                                    class="absolute right-2 p-0.5 rounded-full text-slate-400 hover:text-slate-600 dark:hover:text-white"
+                                >
+                                    <X class="w-3 h-3" />
+                                </button>
+                                <Loader2 v-if="isSearching" class="absolute right-7 w-3 h-3 animate-spin text-blue-500" />
+                            </div>
+
+                            <!-- Search Dropdown Results -->
+                            <div
+                                v-if="showSearchResults && searchResults.length > 0"
+                                class="absolute left-0 right-0 top-full mt-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden z-30 divide-y divide-slate-100 dark:divide-slate-800 max-h-56 overflow-y-auto"
+                            >
+                                <div
+                                    v-for="(item, idx) in searchResults"
+                                    :key="idx"
+                                    @click="selectSearchResult(item)"
+                                    class="p-2 hover:bg-blue-50 dark:hover:bg-blue-900/30 cursor-pointer transition flex items-start gap-2"
+                                >
+                                    <div :class="[
+                                        'w-5 h-5 rounded-md flex items-center justify-center shrink-0 mt-0.5',
+                                        item.isCoordinate ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400' : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
+                                    ]">
+                                        <Crosshair v-if="item.isCoordinate" class="w-3 h-3" />
+                                        <MapPin v-else class="w-3 h-3" />
+                                    </div>
+                                    <div class="min-w-0 flex-1">
+                                        <p class="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">{{ item.title }}</p>
+                                        <p class="text-[10px] text-slate-500 dark:text-slate-400 line-clamp-1">{{ item.address }}</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <div id="visualizerMap" class="w-full h-full min-h-[500px] z-10"></div>
@@ -735,13 +947,44 @@ watch(() => props.branches, () => {
                         </div>
                     </div>
 
+                    <!-- Smart GPS / DMS Paste Helper -->
+                    <div class="p-3.5 bg-blue-50/70 dark:bg-slate-950/80 border border-blue-200/80 dark:border-blue-900/40 rounded-xl space-y-2">
+                        <div class="flex items-center justify-between text-xs">
+                            <label class="font-bold text-blue-900 dark:text-blue-300 flex items-center gap-1.5">
+                                <Crosshair class="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                                Smart Coordinate / DMS Paste
+                            </label>
+                            <span class="text-[10px] text-slate-400">DMS or Decimal</span>
+                        </div>
+                        <div class="flex gap-2">
+                            <input
+                                v-model="pasteCoordinateInput"
+                                @keydown.enter.prevent="applyPastedCoordinates"
+                                type="text"
+                                placeholder="Paste e.g. 2°38'04.5&quot;S 121°06'27.0&quot;E or -2.634581, 121.107485"
+                                class="flex-1 px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-mono text-slate-900 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-blue-500"
+                            />
+                            <button
+                                type="button"
+                                @click="applyPastedCoordinates"
+                                :disabled="!pasteCoordinateInput"
+                                class="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition disabled:opacity-40 flex items-center gap-1 shadow-xs"
+                                title="Parse and apply to Latitude / Longitude"
+                            >
+                                <ClipboardPaste class="w-3.5 h-3.5" />
+                                Apply
+                            </button>
+                        </div>
+                    </div>
+
                     <!-- Coordinates & Radius -->
                     <div class="grid grid-cols-2 gap-3">
                         <div>
                             <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Latitude</label>
                             <input
                                 v-model.number="form.latitude"
-                                @input="updateEditorOverlays"
+                                @input="onCoordinateChange"
+                                @change="onCoordinateChange"
                                 type="number"
                                 step="any"
                                 required
@@ -752,7 +995,8 @@ watch(() => props.branches, () => {
                             <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Longitude</label>
                             <input
                                 v-model.number="form.longitude"
-                                @input="updateEditorOverlays"
+                                @input="onCoordinateChange"
+                                @change="onCoordinateChange"
                                 type="number"
                                 step="any"
                                 required
@@ -884,6 +1128,7 @@ watch(() => props.branches, () => {
 
                 <!-- Right: Dedicated Interactive Drawing Map (7 Cols) -->
                 <div class="lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-xl relative flex flex-col">
+                    <!-- Status Badge -->
                     <div class="absolute top-4 right-4 z-20 flex items-center gap-2 bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 backdrop-blur-md px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-800 dark:text-slate-200 shadow-lg">
                         <span v-if="form.geofence_type === 'polygon'" class="text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
                             <PenTool class="w-3.5 h-3.5" />
@@ -893,6 +1138,57 @@ watch(() => props.branches, () => {
                             <Compass class="w-3.5 h-3.5" />
                             Click Map or Drag Pin to Set Center
                         </span>
+                    </div>
+
+                    <!-- Editor Map Location Search Bar -->
+                    <div class="absolute top-4 left-16 z-20 w-64 sm:w-80">
+                        <div class="relative">
+                            <div class="relative flex items-center">
+                                <Search class="absolute left-3 w-3.5 h-3.5 text-slate-400" />
+                                <input
+                                    v-model="searchQuery"
+                                    @input="onSearchInput"
+                                    @focus="if (searchResults.length > 0) showSearchResults = true;"
+                                    type="text"
+                                    placeholder="Search place (e.g. Malili) or paste GPS..."
+                                    class="w-full pl-8 pr-7 py-1.5 bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 backdrop-blur-md rounded-xl text-xs text-slate-900 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-lg"
+                                />
+                                <button
+                                    v-if="searchQuery"
+                                    @click="clearSearch"
+                                    type="button"
+                                    class="absolute right-2 p-0.5 rounded-full text-slate-400 hover:text-slate-600 dark:hover:text-white"
+                                >
+                                    <X class="w-3 h-3" />
+                                </button>
+                                <Loader2 v-if="isSearching" class="absolute right-7 w-3 h-3 animate-spin text-blue-500" />
+                            </div>
+
+                            <!-- Search Dropdown Results -->
+                            <div
+                                v-if="showSearchResults && searchResults.length > 0"
+                                class="absolute left-0 right-0 top-full mt-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden z-30 divide-y divide-slate-100 dark:divide-slate-800 max-h-56 overflow-y-auto"
+                            >
+                                <div
+                                    v-for="(item, idx) in searchResults"
+                                    :key="idx"
+                                    @click="selectSearchResult(item)"
+                                    class="p-2 hover:bg-blue-50 dark:hover:bg-blue-900/30 cursor-pointer transition flex items-start gap-2"
+                                >
+                                    <div :class="[
+                                        'w-5 h-5 rounded-md flex items-center justify-center shrink-0 mt-0.5',
+                                        item.isCoordinate ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400' : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
+                                    ]">
+                                        <Crosshair v-if="item.isCoordinate" class="w-3 h-3" />
+                                        <MapPin v-else class="w-3 h-3" />
+                                    </div>
+                                    <div class="min-w-0 flex-1">
+                                        <p class="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">{{ item.title }}</p>
+                                        <p class="text-[10px] text-slate-500 dark:text-slate-400 line-clamp-1">{{ item.address }}</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <div id="editorMap" class="w-full h-full min-h-[500px] z-10"></div>
