@@ -14,6 +14,7 @@ use App\Models\AppConfig;
 use App\Services\AdmsService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class DashboardController extends Controller
 {
@@ -145,27 +146,69 @@ class DashboardController extends Controller
 
     public function syncAdms(AdmsService $admsService)
     {
-        $punchResult = $admsService->syncPendingPunches();
-        $empResult = $admsService->syncEmployees();
+        @set_time_limit(120);
 
-        $messages = [];
-        if ($punchResult['count'] > 0) {
-            $messages[] = $punchResult['message'];
+        try {
+            $punchResult = $admsService->syncPendingPunches();
+            $empResult = $admsService->syncEmployees();
+
+            $messages = [];
+            $hasFailure = false;
+            $hasSuccess = false;
+
+            if (!empty($punchResult['message'])) {
+                $messages[] = $punchResult['message'];
+                if (!empty($punchResult['success'])) {
+                    $hasSuccess = true;
+                } else {
+                    $hasFailure = true;
+                }
+            }
+
+            if (!empty($empResult['message'])) {
+                $messages[] = $empResult['message'];
+                if (!empty($empResult['success'])) {
+                    $hasSuccess = true;
+                } else {
+                    $hasFailure = true;
+                }
+            }
+
+            $finalMsg = implode(' | ', $messages);
+
+            if ($hasFailure && !$hasSuccess) {
+                return back()->with('error', $finalMsg ?: 'ADMS sync failed.');
+            } elseif ($hasFailure && $hasSuccess) {
+                return back()->with('warning', $finalMsg ?: 'ADMS sync partially completed.');
+            }
+
+            return back()->with('success', $finalMsg ?: 'ADMS sync completed successfully.');
+        } catch (\Throwable $e) {
+            Log::error('DashboardController@syncAdms error: ' . $e->getMessage(), [
+                'exception' => $e
+            ]);
+            return back()->with('error', 'ADMS Sync error: ' . $e->getMessage());
         }
-        $messages[] = $empResult['message'];
-
-        return back()->with('success', implode(' | ', $messages));
     }
 
     public function syncAdmsPushNames(AdmsService $admsService)
     {
-        $result = $admsService->syncAllEmployeesToAdms();
+        @set_time_limit(120);
 
-        $message = $result['message'] ?? 'Sync completed.';
-        if ($result['success']) {
-            return back()->with('success', $message);
+        try {
+            $result = $admsService->syncAllEmployeesToAdms();
+
+            $message = $result['message'] ?? 'Sync completed.';
+            if (!empty($result['success'])) {
+                return back()->with('success', $message);
+            }
+
+            return back()->with('error', $message);
+        } catch (\Throwable $e) {
+            Log::error('DashboardController@syncAdmsPushNames error: ' . $e->getMessage(), [
+                'exception' => $e
+            ]);
+            return back()->with('error', 'ADMS Push Names error: ' . $e->getMessage());
         }
-
-        return back()->with('error', $message);
     }
 }

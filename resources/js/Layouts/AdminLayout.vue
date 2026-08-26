@@ -106,7 +106,13 @@ const navigationGroups = [
 const syncAdms = () => {
     syncing.value = true;
     router.post('/admin/sync-adms', {}, {
-        onFinish: () => syncing.value = false,
+        preserveScroll: true,
+        onFinish: () => {
+            syncing.value = false;
+        },
+        onError: () => {
+            syncing.value = false;
+        },
     });
 };
 </script>
@@ -304,6 +310,12 @@ const syncAdms = () => {
                 <!-- Flash Messages -->
                 <div v-if="$page.props.flash?.success" class="mb-4 p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-xs font-semibold flex items-center justify-between shadow-xs">
                     <span>{{ $page.props.flash.success }}</span>
+                </div>
+                <div v-if="$page.props.flash?.warning" class="mb-4 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-600 dark:text-amber-400 text-xs font-semibold flex items-center justify-between shadow-xs">
+                    <span>{{ $page.props.flash.warning }}</span>
+                </div>
+                <div v-if="$page.props.flash?.info" class="mb-4 p-4 rounded-2xl bg-blue-500/10 border border-blue-500/30 text-blue-600 dark:text-blue-400 text-xs font-semibold flex items-center justify-between shadow-xs">
+                    <span>{{ $page.props.flash.info }}</span>
                 </div>
                 <div v-if="$page.props.flash?.error" class="mb-4 p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-600 dark:text-rose-400 text-xs font-semibold flex items-center justify-between shadow-xs">
                     <span>{{ $page.props.flash.error }}</span>

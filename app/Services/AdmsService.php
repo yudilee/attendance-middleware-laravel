@@ -29,6 +29,8 @@ class AdmsService
      */
     public function syncEmployees(): array
     {
+        @set_time_limit(120);
+
         $creds = AdmsCredential::where('is_active', true)->first();
         if (!$creds || empty($creds->url)) {
             Log::warning('No active ADMS credentials configured. Skipping sync.');
@@ -39,20 +41,26 @@ class AdmsService
         $cookieJar = new \GuzzleHttp\Cookie\CookieJar();
 
         try {
-            // 1. Get CSRF Token from login page
-            $loginPageRes = Http::withOptions(['cookies' => $cookieJar, 'timeout' => 15])
-                ->get("{$admsUrl}/iclock/accounts/");
+            // 1. Get CSRF Token from login page (try login endpoint first, fallback to accounts root)
+            $loginUrl = "{$admsUrl}/iclock/accounts/login/";
+            $loginPageRes = Http::withOptions(['cookies' => $cookieJar, 'timeout' => 20, 'allow_redirects' => true])
+                ->get($loginUrl);
+
+            if (!$loginPageRes->successful()) {
+                $loginUrl = "{$admsUrl}/iclock/accounts/";
+                $loginPageRes = Http::withOptions(['cookies' => $cookieJar, 'timeout' => 20, 'allow_redirects' => true])
+                    ->get($loginUrl);
+            }
 
             if (!$loginPageRes->successful()) {
                 throw new \Exception("Failed to access ADMS login page: HTTP {$loginPageRes->status()}");
             }
 
-            $csrfToken = $cookieJar->getCookieByName('csrftoken')?->getValue();
-            if (!$csrfToken) {
-                // Try regex extraction from HTML form if cookie is missing
-                if (preg_match('/name=["\']csrfmiddlewaretoken["\']\s+value=["\'](.*?)["\']/', $loginPageRes->body(), $m)) {
-                    $csrfToken = $m[1];
-                }
+            $csrfToken = null;
+            if (preg_match('/name=["\']csrfmiddlewaretoken["\']\s+value=["\'](.*?)["\']/', $loginPageRes->body(), $m)) {
+                $csrfToken = $m[1];
+            } else {
+                $csrfToken = $cookieJar->getCookieByName('csrftoken')?->getValue();
             }
 
             if (!$csrfToken) {
@@ -60,12 +68,12 @@ class AdmsService
             }
 
             // 2. Perform Login
-            $loginRes = Http::withOptions(['cookies' => $cookieJar, 'timeout' => 15])
+            $loginRes = Http::withOptions(['cookies' => $cookieJar, 'timeout' => 25, 'allow_redirects' => true])
                 ->withHeaders([
-                    'Referer' => "{$admsUrl}/iclock/accounts/",
+                    'Referer' => $loginUrl,
                 ])
                 ->asForm()
-                ->post("{$admsUrl}/iclock/accounts/", [
+                ->post($loginUrl, [
                     'username' => $creds->username,
                     'password' => $creds->password,
                     'csrfmiddlewaretoken' => $csrfToken,
@@ -76,7 +84,7 @@ class AdmsService
             }
 
             // 3. Fetch full employee data list
-            $employeeRes = Http::withOptions(['cookies' => $cookieJar, 'timeout' => 45])
+            $employeeRes = Http::withOptions(['cookies' => $cookieJar, 'timeout' => 45, 'allow_redirects' => true])
                 ->get("{$admsUrl}/iclock/data/employee/?p=1&l=5000");
 
             if (!$employeeRes->successful()) {
@@ -474,37 +482,51 @@ class AdmsService
      */
     public function syncPendingPunches(): array
     {
-        $creds = AdmsCredential::where('is_active', true)->first();
-        $admsUrl = $creds && !empty($creds->url) ? rtrim($creds->url, '/') : 'https://adms.hartonomotor-group.com';
-
-        $pendingPunches = PunchLog::where('adms_status', 'pending')
-            ->orWhereNull('adms_status')
-            ->orderBy('timestamp', 'asc')
-            ->limit(200)
-            ->get();
-
-        if ($pendingPunches->isEmpty()) {
-            return ['success' => true, 'message' => 'No pending punches to sync.', 'count' => 0];
-        }
-
-        $lines = [];
-        foreach ($pendingPunches as $punch) {
-            $state = strtolower($punch->punch_type) === 'out' ? 1 : 0;
-            $timeStr = $punch->timestamp->format('Y-m-d H:i:s');
-            $lines[] = "{$punch->employee_id}\t{$timeStr}\t{$state}\t0\t\t\t\t\t\t\t\t";
-        }
-
-        $body = implode("\n", $lines) . "\n";
+        @set_time_limit(120);
 
         try {
+            $creds = AdmsCredential::where('is_active', true)->first();
+            $admsUrl = $creds && !empty($creds->url) ? rtrim($creds->url, '/') : 'https://adms.hartonomotor-group.com';
+
+            $pendingPunches = PunchLog::where('adms_status', 'pending')
+                ->orWhereNull('adms_status')
+                ->orderBy('timestamp', 'asc')
+                ->limit(200)
+                ->get();
+
+            if ($pendingPunches->isEmpty()) {
+                return ['success' => true, 'message' => 'No pending punches to sync.', 'count' => 0];
+            }
+
+            $lines = [];
+            $validPunches = [];
+            foreach ($pendingPunches as $punch) {
+                if (empty($punch->employee_id)) {
+                    continue;
+                }
+                $state = strtolower((string)$punch->punch_type) === 'out' ? 1 : 0;
+                $timestamp = $punch->timestamp instanceof Carbon 
+                    ? $punch->timestamp 
+                    : ($punch->timestamp ? Carbon::parse($punch->timestamp) : Carbon::now());
+                $timeStr = $timestamp->format('Y-m-d H:i:s');
+                $lines[] = "{$punch->employee_id}\t{$timeStr}\t{$state}\t0\t\t\t\t\t\t\t\t";
+                $validPunches[] = $punch;
+            }
+
+            if (empty($lines)) {
+                return ['success' => true, 'message' => 'No valid pending punches to sync.', 'count' => 0];
+            }
+
+            $body = implode("\n", $lines) . "\n";
+
             $response = Http::withHeaders([
                 'User-Agent' => 'iClock Proxy/1.0',
                 'Content-Type' => 'text/plain',
-            ])->timeout(20)->withBody($body, 'text/plain')
+            ])->timeout(25)->withBody($body, 'text/plain')
               ->post("{$admsUrl}/iclock/cdata?SN=VIRTUAL_MOBILE_01&table=ATTLOG");
 
             if ($response->successful() || str_contains($response->body(), 'OK')) {
-                $ids = $pendingPunches->pluck('id')->toArray();
+                $ids = collect($validPunches)->pluck('id')->toArray();
                 PunchLog::whereIn('id', $ids)->update([
                     'adms_status' => 'uploaded',
                     'synced_at' => Carbon::now(),
@@ -512,11 +534,11 @@ class AdmsService
 
                 return [
                     'success' => true,
-                    'message' => "Successfully pushed {$pendingPunches->count()} punch records to ADMS.",
-                    'count' => $pendingPunches->count(),
+                    'message' => "Successfully pushed " . count($validPunches) . " punch records to ADMS.",
+                    'count' => count($validPunches),
                 ];
             } else {
-                throw new \Exception("ADMS returned HTTP {$response->status()}: {$response->body()}");
+                throw new \Exception("ADMS returned HTTP {$response->status()}: " . substr($response->body(), 0, 100));
             }
         } catch (\Throwable $e) {
             Log::error("Failed to push punches to ADMS: " . $e->getMessage());
