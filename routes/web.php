@@ -88,6 +88,7 @@ Route::prefix('admin')->middleware(['auth'])->group(function () {
     Route::put('/branches/{branch}', [BranchController::class, 'update'])->name('admin.branches.update');
     Route::delete('/branches/{branch}', [BranchController::class, 'destroy'])->name('admin.branches.destroy');
     Route::post('/branches/{branch}/checkpoints', [BranchController::class, 'storeCheckpoint'])->name('admin.branches.checkpoints.store');
+    Route::put('/checkpoints/{checkpoint}', [BranchController::class, 'updateCheckpoint'])->name('admin.checkpoints.update');
     Route::delete('/checkpoints/{checkpoint}', [BranchController::class, 'destroyCheckpoint'])->name('admin.checkpoints.destroy');
 
     // Shifts & Overtime

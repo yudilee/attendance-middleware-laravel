@@ -22,7 +22,10 @@ import {
     Crosshair,
     Navigation,
     Clock,
-    ClipboardPaste
+    ClipboardPaste,
+    CircleDot,
+    Check,
+    Radio
 } from 'lucide-vue-next';
 
 import 'leaflet/dist/leaflet.css';
@@ -59,8 +62,14 @@ let editorMap = null;
 let editorMarker = null;
 let editorCircle = null;
 let editorPolygon = null;
+let editorAuxLayers = [];
 const isEditing = ref(false);
 const isDrawingPolygon = ref(false);
+
+// Dual-Target Editor State: 'branch' | 'checkpoint'
+const editingTarget = ref('branch');
+const editingCheckpoint = ref(null);
+const isSavingCheckpoint = ref(false);
 
 // Map Search & Coordinate Parsing State
 const searchQuery = ref('');
@@ -172,8 +181,13 @@ const selectSearchResult = (item) => {
     showSearchResults.value = false;
 
     if (currentView.value === 'editor') {
-        form.value.latitude = item.lat;
-        form.value.longitude = item.lng;
+        if (editingTarget.value === 'branch') {
+            form.value.latitude = item.lat;
+            form.value.longitude = item.lng;
+        } else {
+            checkpointForm.value.latitude = item.lat;
+            checkpointForm.value.longitude = item.lng;
+        }
         updateEditorOverlays();
         if (editorMap) {
             editorMap.flyTo([item.lat, item.lng], 17, { duration: 1.2 });
@@ -194,8 +208,13 @@ const clearSearch = () => {
 const applyPastedCoordinates = () => {
     const parsed = parseCoordinates(pasteCoordinateInput.value);
     if (parsed) {
-        form.value.latitude = parsed.lat;
-        form.value.longitude = parsed.lng;
+        if (editingTarget.value === 'branch') {
+            form.value.latitude = parsed.lat;
+            form.value.longitude = parsed.lng;
+        } else {
+            checkpointForm.value.latitude = parsed.lat;
+            checkpointForm.value.longitude = parsed.lng;
+        }
         updateEditorOverlays();
         if (editorMap) {
             editorMap.flyTo([parsed.lat, parsed.lng], 17, { duration: 1.2 });
@@ -207,10 +226,19 @@ const applyPastedCoordinates = () => {
 };
 
 const onCoordinateChange = () => {
-    if (form.value.latitude && form.value.longitude) {
-        updateEditorOverlays();
-        if (editorMap) {
-            editorMap.panTo([form.value.latitude, form.value.longitude]);
+    if (editingTarget.value === 'branch') {
+        if (form.value.latitude && form.value.longitude) {
+            updateEditorOverlays();
+            if (editorMap) {
+                editorMap.panTo([form.value.latitude, form.value.longitude]);
+            }
+        }
+    } else {
+        if (checkpointForm.value.latitude && checkpointForm.value.longitude) {
+            updateEditorOverlays();
+            if (editorMap) {
+                editorMap.panTo([checkpointForm.value.latitude, checkpointForm.value.longitude]);
+            }
         }
     }
 };
@@ -232,6 +260,7 @@ const form = ref({
 
 // Checkpoint Form
 const checkpointForm = ref({
+    id: null,
     name: '',
     latitude: -7.2575,
     longitude: 112.7521,
@@ -275,7 +304,7 @@ const renderVisualizerBranches = () => {
     props.branches.forEach(branch => {
         const group = L.featureGroup();
 
-        // Marker
+        // Main Branch Marker
         const marker = L.marker([branch.latitude, branch.longitude]).bindPopup(`
             <div style="font-family: sans-serif; font-size: 12px; color: #0f172a; padding: 4px;">
                 <b style="font-size: 13px; color: #1e40af;">📍 ${branch.name}</b><br/>
@@ -309,26 +338,52 @@ const renderVisualizerBranches = () => {
             group.addLayer(polygon);
         }
 
-        // Checkpoints
+        // Checkpoints (Both Circular & Polygon)
         if (branch.checkpoints) {
             branch.checkpoints.forEach(cp => {
                 const cpMarker = L.circleMarker([cp.latitude, cp.longitude], {
-                    radius: 5,
-                    color: '#f59e0b',
-                    fillColor: '#fbbf24',
-                    fillOpacity: 0.9,
-                }).bindTooltip(`🟡 Point: ${cp.name}`);
+                    radius: 6,
+                    color: '#b45309',
+                    fillColor: '#f59e0b',
+                    fillOpacity: 0.95,
+                    weight: 2,
+                }).bindTooltip(`🟡 ${cp.name} (${cp.geofence_type === 'polygon' ? 'Polygon' : cp.radius_meters + 'm'})`);
                 group.addLayer(cpMarker);
 
-                const cpCircle = L.circle([cp.latitude, cp.longitude], {
-                    radius: cp.radius_meters,
-                    color: '#f59e0b',
-                    fillColor: '#fbbf24',
-                    fillOpacity: 0.15,
-                    weight: 1.5,
-                    dashArray: '3, 3',
-                });
-                group.addLayer(cpCircle);
+                if (cp.geofence_type === 'polygon' && Array.isArray(cp.polygon_coordinates) && cp.polygon_coordinates.length > 2) {
+                    const cpPolygon = L.polygon(cp.polygon_coordinates, {
+                        color: '#d97706',
+                        fillColor: '#fbbf24',
+                        fillOpacity: 0.25,
+                        weight: 2,
+                        dashArray: '4, 4',
+                    }).bindPopup(`
+                        <div style="font-family: sans-serif; font-size: 12px; color: #0f172a; padding: 4px;">
+                            <b style="font-size: 13px; color: #b45309;">🟡 Checkpoint: ${cp.name}</b><br/>
+                            <span style="color: #64748b;">Branch:</span> <b>${branch.name}</b><br/>
+                            <span style="color: #64748b;">Boundary:</span> <b>Polygon</b> (${cp.polygon_coordinates.length} pts)<br/>
+                            <span style="color: #64748b;">Center GPS:</span> ${cp.latitude.toFixed(5)}, ${cp.longitude.toFixed(5)}
+                        </div>
+                    `);
+                    group.addLayer(cpPolygon);
+                } else {
+                    const cpCircle = L.circle([cp.latitude, cp.longitude], {
+                        radius: cp.radius_meters || 30,
+                        color: '#d97706',
+                        fillColor: '#fbbf24',
+                        fillOpacity: 0.18,
+                        weight: 1.5,
+                        dashArray: '3, 3',
+                    }).bindPopup(`
+                        <div style="font-family: sans-serif; font-size: 12px; color: #0f172a; padding: 4px;">
+                            <b style="font-size: 13px; color: #b45309;">🟡 Checkpoint: ${cp.name}</b><br/>
+                            <span style="color: #64748b;">Branch:</span> <b>${branch.name}</b><br/>
+                            <span style="color: #64748b;">Boundary:</span> <b>Circular Radius</b> (${cp.radius_meters}m)<br/>
+                            <span style="color: #64748b;">Center GPS:</span> ${cp.latitude.toFixed(5)}, ${cp.longitude.toFixed(5)}
+                        </div>
+                    `);
+                    group.addLayer(cpCircle);
+                }
             });
         }
 
@@ -345,11 +400,13 @@ const flyToBranch = (branch) => {
 };
 
 // -------------------------------------------------------------
-// 2. DEDICATED EDITOR MAP (FULL DRAWING & EDITING MODE)
+// 2. DEDICATED EDITOR MAP (FULL DUAL-MODE DRAWING & EDITING)
 // -------------------------------------------------------------
 const openCreateView = () => {
     isEditing.value = false;
     selectedBranch.value = null;
+    editingTarget.value = 'branch';
+    editingCheckpoint.value = null;
 
     const center = visualizerMap ? visualizerMap.getCenter() : { lat: -7.2575, lng: 112.7521 };
     form.value = {
@@ -376,6 +433,8 @@ const openCreateView = () => {
 const openEditView = (branch) => {
     isEditing.value = true;
     selectedBranch.value = branch;
+    editingTarget.value = 'branch';
+    editingCheckpoint.value = null;
 
     form.value = {
         id: branch.id,
@@ -407,10 +466,13 @@ const initEditorMap = () => {
         editorMap = null;
     }
 
+    const initLat = editingTarget.value === 'branch' ? form.value.latitude : checkpointForm.value.latitude;
+    const initLng = editingTarget.value === 'branch' ? form.value.longitude : checkpointForm.value.longitude;
+
     editorMap = L.map('editorMap', {
         zoomControl: false,
         attributionControl: false,
-    }).setView([form.value.latitude, form.value.longitude], 16);
+    }).setView([initLat, initLng], 16);
 
     L.control.zoom({ position: 'topright' }).addTo(editorMap);
 
@@ -419,7 +481,7 @@ const initEditorMap = () => {
         subdomains: 'abcd',
     }).addTo(editorMap);
 
-    // Add Geoman Toolbar Controls to Editor Map
+    // Geoman Toolbar Controls
     editorMap.pm.addControls({
         position: 'topleft',
         drawPolygon: true,
@@ -436,9 +498,13 @@ const initEditorMap = () => {
 
     // Handle map click to relocate center pin in circle mode
     editorMap.on('click', (e) => {
-        if (form.value.geofence_type === 'circle') {
+        if (editingTarget.value === 'branch' && form.value.geofence_type === 'circle') {
             form.value.latitude = parseFloat(e.latlng.lat.toFixed(6));
             form.value.longitude = parseFloat(e.latlng.lng.toFixed(6));
+            updateEditorOverlays();
+        } else if (editingTarget.value === 'checkpoint' && checkpointForm.value.geofence_type === 'circle') {
+            checkpointForm.value.latitude = parseFloat(e.latlng.lat.toFixed(6));
+            checkpointForm.value.longitude = parseFloat(e.latlng.lng.toFixed(6));
             updateEditorOverlays();
         }
     });
@@ -448,14 +514,19 @@ const initEditorMap = () => {
         if (e.shape === 'Polygon' || e.shape === 'Rectangle') {
             const latlngs = e.layer.getLatLngs()[0];
             const coords = latlngs.map(pt => [parseFloat(pt.lat.toFixed(6)), parseFloat(pt.lng.toFixed(6))]);
-
-            form.value.polygon_coordinates = JSON.stringify(coords);
-            form.value.geofence_type = 'polygon';
-
-            // Auto-compute center coordinate
             const center = e.layer.getBounds().getCenter();
-            form.value.latitude = parseFloat(center.lat.toFixed(6));
-            form.value.longitude = parseFloat(center.lng.toFixed(6));
+
+            if (editingTarget.value === 'branch') {
+                form.value.polygon_coordinates = JSON.stringify(coords);
+                form.value.geofence_type = 'polygon';
+                form.value.latitude = parseFloat(center.lat.toFixed(6));
+                form.value.longitude = parseFloat(center.lng.toFixed(6));
+            } else {
+                checkpointForm.value.polygon_coordinates = JSON.stringify(coords);
+                checkpointForm.value.geofence_type = 'polygon';
+                checkpointForm.value.latitude = parseFloat(center.lat.toFixed(6));
+                checkpointForm.value.longitude = parseFloat(center.lng.toFixed(6));
+            }
 
             if (editorPolygon && editorMap.hasLayer(editorPolygon)) {
                 editorMap.removeLayer(editorPolygon);
@@ -467,17 +538,28 @@ const initEditorMap = () => {
             e.layer.on('pm:edit', (ev) => {
                 const updatedPts = ev.target.getLatLngs()[0];
                 const updatedCoords = updatedPts.map(pt => [parseFloat(pt.lat.toFixed(6)), parseFloat(pt.lng.toFixed(6))]);
-                form.value.polygon_coordinates = JSON.stringify(updatedCoords);
                 const newCenter = ev.target.getBounds().getCenter();
-                form.value.latitude = parseFloat(newCenter.lat.toFixed(6));
-                form.value.longitude = parseFloat(newCenter.lng.toFixed(6));
+
+                if (editingTarget.value === 'branch') {
+                    form.value.polygon_coordinates = JSON.stringify(updatedCoords);
+                    form.value.latitude = parseFloat(newCenter.lat.toFixed(6));
+                    form.value.longitude = parseFloat(newCenter.lng.toFixed(6));
+                } else {
+                    checkpointForm.value.polygon_coordinates = JSON.stringify(updatedCoords);
+                    checkpointForm.value.latitude = parseFloat(newCenter.lat.toFixed(6));
+                    checkpointForm.value.longitude = parseFloat(newCenter.lng.toFixed(6));
+                }
             });
         }
     });
 
     editorMap.on('pm:remove', (e) => {
         if (e.layer === editorPolygon) {
-            form.value.polygon_coordinates = '';
+            if (editingTarget.value === 'branch') {
+                form.value.polygon_coordinates = '';
+            } else {
+                checkpointForm.value.polygon_coordinates = '';
+            }
             editorPolygon = null;
         }
     });
@@ -486,73 +568,262 @@ const initEditorMap = () => {
 const updateEditorOverlays = () => {
     if (!editorMap) return;
 
-    // Remove previous temporary overlays
+    // Clean up primary overlays
     if (editorMarker && editorMap.hasLayer(editorMarker)) editorMap.removeLayer(editorMarker);
     if (editorCircle && editorMap.hasLayer(editorCircle)) editorMap.removeLayer(editorCircle);
     if (editorPolygon && editorMap.hasLayer(editorPolygon)) editorMap.removeLayer(editorPolygon);
 
-    const lat = form.value.latitude;
-    const lng = form.value.longitude;
-    const rad = form.value.radius_meters;
-
-    // Draggable Center Pin
-    editorMarker = L.marker([lat, lng], {
-        draggable: true,
-        title: 'Center GPS Location',
-    }).addTo(editorMap);
-
-    editorMarker.on('dragend', (e) => {
-        const pt = e.target.getLatLng();
-        form.value.latitude = parseFloat(pt.lat.toFixed(6));
-        form.value.longitude = parseFloat(pt.lng.toFixed(6));
-        updateEditorOverlays();
+    // Clean up auxiliary layers
+    editorAuxLayers.forEach(l => {
+        if (editorMap.hasLayer(l)) editorMap.removeLayer(l);
     });
+    editorAuxLayers = [];
 
-    // Circular Radius Overlay
-    if (form.value.geofence_type === 'circle') {
-        editorCircle = L.circle([lat, lng], {
-            radius: rad,
-            color: '#2563eb',
-            fillColor: '#3b82f6',
-            fillOpacity: 0.3,
-            weight: 3,
+    // =========================================================================
+    // CASE A: EDITING MAIN BRANCH PERIMETER
+    // =========================================================================
+    if (editingTarget.value === 'branch') {
+        const lat = form.value.latitude;
+        const lng = form.value.longitude;
+        const rad = form.value.radius_meters;
+
+        // Draggable Blue Branch Marker
+        editorMarker = L.marker([lat, lng], {
+            draggable: true,
+            title: 'Branch Center Location',
         }).addTo(editorMap);
+
+        editorMarker.on('dragend', (e) => {
+            const pt = e.target.getLatLng();
+            form.value.latitude = parseFloat(pt.lat.toFixed(6));
+            form.value.longitude = parseFloat(pt.lng.toFixed(6));
+            updateEditorOverlays();
+        });
+
+        // Branch Circular Radius
+        if (form.value.geofence_type === 'circle') {
+            editorCircle = L.circle([lat, lng], {
+                radius: rad,
+                color: '#2563eb',
+                fillColor: '#3b82f6',
+                fillOpacity: 0.28,
+                weight: 3,
+            }).addTo(editorMap);
+        }
+
+        // Branch Polygon Overlay
+        if (form.value.geofence_type === 'polygon' && form.value.polygon_coordinates) {
+            try {
+                const coords = typeof form.value.polygon_coordinates === 'string'
+                    ? JSON.parse(form.value.polygon_coordinates)
+                    : form.value.polygon_coordinates;
+
+                if (Array.isArray(coords) && coords.length > 2) {
+                    editorPolygon = L.polygon(coords, {
+                        color: '#10b981',
+                        fillColor: '#34d399',
+                        fillOpacity: 0.35,
+                        weight: 3,
+                    }).addTo(editorMap);
+
+                    editorPolygon.pm.enable();
+
+                    editorPolygon.on('pm:edit', (ev) => {
+                        const updatedPts = ev.target.getLatLngs()[0];
+                        const updatedCoords = updatedPts.map(pt => [parseFloat(pt.lat.toFixed(6)), parseFloat(pt.lng.toFixed(6))]);
+                        form.value.polygon_coordinates = JSON.stringify(updatedCoords);
+                        const newCenter = ev.target.getBounds().getCenter();
+                        form.value.latitude = parseFloat(newCenter.lat.toFixed(6));
+                        form.value.longitude = parseFloat(newCenter.lng.toFixed(6));
+                    });
+                }
+            } catch (e) {}
+        }
+
+        // Auxiliary Display: Show all existing checkpoints for visual context
+        if (selectedBranch.value?.checkpoints) {
+            selectedBranch.value.checkpoints.forEach(cp => {
+                const cpM = L.circleMarker([cp.latitude, cp.longitude], {
+                    radius: 6,
+                    color: '#b45309',
+                    fillColor: '#f59e0b',
+                    fillOpacity: 0.9,
+                    weight: 2,
+                }).bindTooltip(`🟡 Checkpoint: ${cp.name} (Click to Edit)`).on('click', () => {
+                    startEditCheckpoint(cp);
+                });
+                cpM.addTo(editorMap);
+                editorAuxLayers.push(cpM);
+
+                if (cp.geofence_type === 'polygon' && cp.polygon_coordinates) {
+                    try {
+                        const cpCoords = typeof cp.polygon_coordinates === 'string' ? JSON.parse(cp.polygon_coordinates) : cp.polygon_coordinates;
+                        if (Array.isArray(cpCoords) && cpCoords.length > 2) {
+                            const cpPoly = L.polygon(cpCoords, {
+                                color: '#d97706',
+                                fillColor: '#fbbf24',
+                                fillOpacity: 0.2,
+                                weight: 2,
+                                dashArray: '4, 4',
+                            }).on('click', () => {
+                                startEditCheckpoint(cp);
+                            });
+                            cpPoly.addTo(editorMap);
+                            editorAuxLayers.push(cpPoly);
+                        }
+                    } catch (e) {}
+                } else {
+                    const cpCirc = L.circle([cp.latitude, cp.longitude], {
+                        radius: cp.radius_meters || 30,
+                        color: '#d97706',
+                        fillColor: '#fbbf24',
+                        fillOpacity: 0.15,
+                        weight: 1.5,
+                        dashArray: '3, 3',
+                    }).on('click', () => {
+                        startEditCheckpoint(cp);
+                    });
+                    cpCirc.addTo(editorMap);
+                    editorAuxLayers.push(cpCirc);
+                }
+            });
+        }
     }
 
-    // Polygon Overlay
-    if (form.value.geofence_type === 'polygon' && form.value.polygon_coordinates) {
-        try {
-            const coords = typeof form.value.polygon_coordinates === 'string'
-                ? JSON.parse(form.value.polygon_coordinates)
-                : form.value.polygon_coordinates;
+    // =========================================================================
+    // CASE B: EDITING A CHECKPOINT (PARITY WITH MAIN GEOFENCE)
+    // =========================================================================
+    else if (editingTarget.value === 'checkpoint') {
+        // 1. Auxiliary Context: Branch Main Geofence (faint reference)
+        if (form.value.geofence_type === 'polygon' && form.value.polygon_coordinates) {
+            try {
+                const bCoords = typeof form.value.polygon_coordinates === 'string' ? JSON.parse(form.value.polygon_coordinates) : form.value.polygon_coordinates;
+                if (Array.isArray(bCoords) && bCoords.length > 2) {
+                    const bPoly = L.polygon(bCoords, {
+                        color: '#10b981',
+                        fillColor: '#34d399',
+                        fillOpacity: 0.1,
+                        weight: 2,
+                        dashArray: '5, 5',
+                    });
+                    bPoly.addTo(editorMap);
+                    editorAuxLayers.push(bPoly);
+                }
+            } catch (e) {}
+        } else {
+            const bCirc = L.circle([form.value.latitude, form.value.longitude], {
+                radius: form.value.radius_meters,
+                color: '#3b82f6',
+                fillColor: '#60a5fa',
+                fillOpacity: 0.1,
+                weight: 1.5,
+                dashArray: '5, 5',
+            });
+            bCirc.addTo(editorMap);
+            editorAuxLayers.push(bCirc);
+        }
 
-            if (Array.isArray(coords) && coords.length > 2) {
-                editorPolygon = L.polygon(coords, {
-                    color: '#10b981',
-                    fillColor: '#34d399',
-                    fillOpacity: 0.35,
-                    weight: 3,
-                }).addTo(editorMap);
+        // Branch center pin reference
+        const bMarker = L.circleMarker([form.value.latitude, form.value.longitude], {
+            radius: 5,
+            color: '#2563eb',
+            fillColor: '#60a5fa',
+            fillOpacity: 0.6,
+        }).bindTooltip(`📍 Branch Center: ${form.value.name || 'HQ'}`);
+        bMarker.addTo(editorMap);
+        editorAuxLayers.push(bMarker);
 
-                // Enable Geoman editing on this polygon
-                editorPolygon.pm.enable();
+        // 2. Auxiliary Context: Other Checkpoints (faint)
+        if (selectedBranch.value?.checkpoints) {
+            selectedBranch.value.checkpoints.forEach(cp => {
+                if (editingCheckpoint.value && cp.id === editingCheckpoint.value.id) return; // Skip active one
 
-                editorPolygon.on('pm:edit', (ev) => {
-                    const updatedPts = ev.target.getLatLngs()[0];
-                    const updatedCoords = updatedPts.map(pt => [parseFloat(pt.lat.toFixed(6)), parseFloat(pt.lng.toFixed(6))]);
-                    form.value.polygon_coordinates = JSON.stringify(updatedCoords);
-                });
-            }
-        } catch (e) {}
+                const otherM = L.circleMarker([cp.latitude, cp.longitude], {
+                    radius: 5,
+                    color: '#78350f',
+                    fillColor: '#d97706',
+                    fillOpacity: 0.4,
+                }).bindTooltip(`Point: ${cp.name}`);
+                otherM.addTo(editorMap);
+                editorAuxLayers.push(otherM);
+            });
+        }
+
+        // 3. Active Checkpoint Elements (Amber/Gold Editable)
+        const cpLat = checkpointForm.value.latitude;
+        const cpLng = checkpointForm.value.longitude;
+        const cpRad = checkpointForm.value.radius_meters;
+
+        // Draggable Amber Checkpoint Center Pin
+        editorMarker = L.marker([cpLat, cpLng], {
+            draggable: true,
+            title: 'Drag Checkpoint Center',
+        }).addTo(editorMap);
+
+        editorMarker.on('dragend', (e) => {
+            const pt = e.target.getLatLng();
+            checkpointForm.value.latitude = parseFloat(pt.lat.toFixed(6));
+            checkpointForm.value.longitude = parseFloat(pt.lng.toFixed(6));
+            updateEditorOverlays();
+        });
+
+        // Checkpoint Circular Radius Overlay
+        if (checkpointForm.value.geofence_type === 'circle') {
+            editorCircle = L.circle([cpLat, cpLng], {
+                radius: cpRad,
+                color: '#d97706',
+                fillColor: '#fbbf24',
+                fillOpacity: 0.35,
+                weight: 3,
+            }).addTo(editorMap);
+        }
+
+        // Checkpoint Polygon Overlay (Geoman Editable)
+        if (checkpointForm.value.geofence_type === 'polygon' && checkpointForm.value.polygon_coordinates) {
+            try {
+                const coords = typeof checkpointForm.value.polygon_coordinates === 'string'
+                    ? JSON.parse(checkpointForm.value.polygon_coordinates)
+                    : checkpointForm.value.polygon_coordinates;
+
+                if (Array.isArray(coords) && coords.length > 2) {
+                    editorPolygon = L.polygon(coords, {
+                        color: '#d97706',
+                        fillColor: '#fbbf24',
+                        fillOpacity: 0.38,
+                        weight: 3,
+                    }).addTo(editorMap);
+
+                    editorPolygon.pm.enable();
+
+                    editorPolygon.on('pm:edit', (ev) => {
+                        const updatedPts = ev.target.getLatLngs()[0];
+                        const updatedCoords = updatedPts.map(pt => [parseFloat(pt.lat.toFixed(6)), parseFloat(pt.lng.toFixed(6))]);
+                        checkpointForm.value.polygon_coordinates = JSON.stringify(updatedCoords);
+                        const newCenter = ev.target.getBounds().getCenter();
+                        checkpointForm.value.latitude = parseFloat(newCenter.lat.toFixed(6));
+                        checkpointForm.value.longitude = parseFloat(newCenter.lng.toFixed(6));
+                    });
+                }
+            } catch (e) {}
+        }
     }
 };
 
 const switchGeofenceType = (type) => {
-    form.value.geofence_type = type;
-    if (type === 'polygon' && !form.value.polygon_coordinates) {
-        startDrawPolygonTool();
+    if (editingTarget.value === 'branch') {
+        form.value.geofence_type = type;
+        if (type === 'polygon' && !form.value.polygon_coordinates) {
+            startDrawPolygonTool();
+        } else {
+            updateEditorOverlays();
+        }
     } else {
-        updateEditorOverlays();
+        checkpointForm.value.geofence_type = type;
+        if (type === 'polygon' && !checkpointForm.value.polygon_coordinates) {
+            startDrawPolygonTool();
+        } else {
+            updateEditorOverlays();
+        }
     }
 };
 
@@ -570,11 +841,16 @@ const startDrawPolygonTool = () => {
 };
 
 const clearPolygonTool = () => {
-    form.value.polygon_coordinates = '';
+    if (editingTarget.value === 'branch') {
+        form.value.polygon_coordinates = '';
+    } else {
+        checkpointForm.value.polygon_coordinates = '';
+    }
     if (editorPolygon && editorMap.hasLayer(editorPolygon)) {
         editorMap.removeLayer(editorPolygon);
         editorPolygon = null;
     }
+    updateEditorOverlays();
 };
 
 const saveBranch = () => {
@@ -595,10 +871,12 @@ const saveBranch = () => {
 
 const backToVisualizer = () => {
     currentView.value = 'visualizer';
+    editingTarget.value = 'branch';
+    editingCheckpoint.value = null;
     nextTick(() => {
         initVisualizerMap();
         renderVisualizerBranches();
-        visualizerMap.invalidateSize();
+        if (visualizerMap) visualizerMap.invalidateSize();
     });
 };
 
@@ -625,18 +903,111 @@ const deleteBranch = (id) => {
     }
 };
 
-const addCheckpoint = () => {
-    if (!selectedBranch.value) return;
-    router.post(`/admin/branches/${selectedBranch.value.id}/checkpoints`, checkpointForm.value, {
-        onSuccess: () => {
-            checkpointForm.value.name = '';
+// Checkpoint Actions
+const startAddCheckpoint = () => {
+    editingTarget.value = 'checkpoint';
+    editingCheckpoint.value = null;
+
+    const lat = form.value.latitude || (editorMap ? editorMap.getCenter().lat : -7.2575);
+    const lng = form.value.longitude || (editorMap ? editorMap.getCenter().lng : 112.7521);
+
+    checkpointForm.value = {
+        id: null,
+        name: '',
+        latitude: parseFloat(Number(lat).toFixed(6)),
+        longitude: parseFloat(Number(lng).toFixed(6)),
+        radius_meters: 30,
+        geofence_type: 'circle',
+        polygon_coordinates: '',
+        is_active: true,
+    };
+
+    nextTick(() => {
+        updateEditorOverlays();
+        if (editorMap) {
+            editorMap.panTo([checkpointForm.value.latitude, checkpointForm.value.longitude]);
         }
     });
 };
 
+const startEditCheckpoint = (cp) => {
+    editingTarget.value = 'checkpoint';
+    editingCheckpoint.value = cp;
+
+    checkpointForm.value = {
+        id: cp.id,
+        name: cp.name,
+        latitude: parseFloat(Number(cp.latitude).toFixed(6)),
+        longitude: parseFloat(Number(cp.longitude).toFixed(6)),
+        radius_meters: cp.radius_meters || 30,
+        geofence_type: cp.geofence_type || 'circle',
+        polygon_coordinates: cp.polygon_coordinates ? (typeof cp.polygon_coordinates === 'string' ? cp.polygon_coordinates : JSON.stringify(cp.polygon_coordinates)) : '',
+        is_active: cp.is_active !== false,
+    };
+
+    nextTick(() => {
+        updateEditorOverlays();
+        if (editorMap) {
+            editorMap.flyTo([cp.latitude, cp.longitude], 17);
+        }
+    });
+};
+
+const exitCheckpointMode = () => {
+    editingTarget.value = 'branch';
+    editingCheckpoint.value = null;
+    nextTick(() => {
+        updateEditorOverlays();
+        if (editorMap && form.value.latitude && form.value.longitude) {
+            editorMap.panTo([form.value.latitude, form.value.longitude]);
+        }
+    });
+};
+
+const saveCheckpoint = () => {
+    if (!selectedBranch.value) return;
+    if (!checkpointForm.value.name?.trim()) {
+        alert('Please provide a name for this checkpoint.');
+        return;
+    }
+
+    isSavingCheckpoint.value = true;
+
+    if (editingCheckpoint.value && editingCheckpoint.value.id) {
+        router.put(`/admin/checkpoints/${editingCheckpoint.value.id}`, checkpointForm.value, {
+            preserveScroll: true,
+            onSuccess: () => {
+                isSavingCheckpoint.value = false;
+                exitCheckpointMode();
+            },
+            onError: () => {
+                isSavingCheckpoint.value = false;
+            }
+        });
+    } else {
+        router.post(`/admin/branches/${selectedBranch.value.id}/checkpoints`, checkpointForm.value, {
+            preserveScroll: true,
+            onSuccess: () => {
+                isSavingCheckpoint.value = false;
+                exitCheckpointMode();
+            },
+            onError: () => {
+                isSavingCheckpoint.value = false;
+            }
+        });
+    }
+};
+
 const deleteCheckpoint = (cpId) => {
     if (confirm('Delete this checkpoint?')) {
-        router.delete(`/admin/checkpoints/${cpId}`);
+        router.delete(`/admin/checkpoints/${cpId}`, {
+            preserveScroll: true,
+            onSuccess: () => {
+                if (editingCheckpoint.value && editingCheckpoint.value.id === cpId) {
+                    exitCheckpointMode();
+                }
+            }
+        });
     }
 };
 
@@ -644,9 +1015,17 @@ onMounted(() => {
     initVisualizerMap();
 });
 
-watch(() => props.branches, () => {
+watch(() => props.branches, (newBranches) => {
+    if (selectedBranch.value) {
+        const updated = newBranches.find(b => b.id === selectedBranch.value.id);
+        if (updated) {
+            selectedBranch.value = updated;
+        }
+    }
     if (currentView.value === 'visualizer') {
         renderVisualizerBranches();
+    } else if (currentView.value === 'editor') {
+        updateEditorOverlays();
     }
 }, { deep: true });
 </script>
@@ -666,7 +1045,7 @@ watch(() => props.branches, () => {
                         <Compass class="w-5 h-5 text-blue-600 dark:text-blue-400" />
                         Branch Spatial Map & Geofences
                     </h2>
-                    <p class="text-xs text-slate-500 dark:text-slate-400">Read-only overview of all branch geofences. Click 'Edit' or '+ Add New Branch' to modify boundaries on the map.</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Read-only overview of all branch geofences & checkpoints. Click 'Edit' or '+ Add New Branch' to modify boundaries on the map.</p>
                 </div>
 
                 <button
@@ -749,45 +1128,32 @@ watch(() => props.branches, () => {
                                 </select>
                             </div>
 
-                            <div class="flex justify-between items-center text-[11px] text-slate-500 dark:text-slate-400">
-                                <span>Center:</span>
-                                <span class="font-mono text-slate-700 dark:text-slate-300">{{ branch.latitude.toFixed(4) }}, {{ branch.longitude.toFixed(4) }}</span>
-                            </div>
-                            <div class="flex justify-between items-center text-[11px] text-slate-500 dark:text-slate-400">
-                                <span>Boundary:</span>
+                            <!-- Boundary & Checkpoint Pills -->
+                            <div class="flex items-center justify-between text-[11px]">
+                                <span class="text-slate-500 dark:text-slate-400">Boundary:</span>
                                 <span :class="[
-                                    'font-bold uppercase',
-                                    branch.geofence_type === 'polygon' ? 'text-emerald-600 dark:text-emerald-400' : 'text-blue-600 dark:text-blue-400'
+                                    'px-2 py-0.5 rounded-full font-bold text-[10px]',
+                                    branch.geofence_type === 'polygon'
+                                        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                                        : 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20'
                                 ]">
-                                    {{ branch.geofence_type }} ({{ branch.radius_meters }}m)
+                                    {{ branch.geofence_type === 'polygon' ? '⬡ Polygon' : `⭕ ${branch.radius_meters}m Radius` }}
                                 </span>
                             </div>
-                            <div class="flex justify-between items-center text-[11px] text-slate-500 dark:text-slate-400">
-                                <span>Checkpoints:</span>
-                                <span class="text-amber-600 dark:text-amber-400 font-semibold">{{ branch.checkpoints_count }} assigned</span>
+
+                            <div class="flex items-center justify-between text-[11px]">
+                                <span class="text-slate-500 dark:text-slate-400">Checkpoints:</span>
+                                <span class="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20 font-bold text-[10px]">
+                                    🟡 {{ branch.checkpoints_count || 0 }} Checkpoint(s)
+                                </span>
                             </div>
                         </div>
                     </div>
-
-                    <div v-if="branches.length === 0" class="p-8 text-center bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl text-slate-500 text-xs shadow-xs">
-                        No branches configured. Click "+ Add New Branch" to create one.
-                    </div>
                 </div>
 
-                <!-- Right: Read-Only Leaflet Map (8 Cols) -->
+                <!-- Right: Full Interactive Visualizer Map (8 Cols) -->
                 <div class="lg:col-span-8 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-xl relative flex flex-col">
-                    <!-- Layer Legends -->
-                    <div class="absolute top-4 left-4 z-20 flex items-center gap-2 bg-white/95 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800/90 backdrop-blur-md px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-800 dark:text-slate-200 shadow-lg">
-                        <Layers class="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-                        <span>Live Branch Geofences</span>
-                        <span class="text-slate-400 dark:text-slate-500">|</span>
-                        <span class="text-blue-600 dark:text-blue-400 flex items-center gap-1">⭕ Circle</span>
-                        <span class="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">⬡ Polygon</span>
-                        <span class="text-amber-600 dark:text-amber-400 flex items-center gap-1">🟡 Checkpoint</span>
-                    </div>
-
-                    <!-- Visualizer Map Location Search Bar -->
-                    <div class="absolute top-4 right-4 z-20 w-64 sm:w-72">
+                    <div class="absolute top-4 left-4 z-20 w-64 sm:w-80">
                         <div class="relative">
                             <div class="relative flex items-center">
                                 <Search class="absolute left-3 w-3.5 h-3.5 text-slate-400" />
@@ -810,7 +1176,6 @@ watch(() => props.branches, () => {
                                 <Loader2 v-if="isSearching" class="absolute right-7 w-3 h-3 animate-spin text-blue-500" />
                             </div>
 
-                            <!-- Search Dropdown Results -->
                             <div
                                 v-if="showSearchResults && searchResults.length > 0"
                                 class="absolute left-0 right-0 top-full mt-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden z-30 divide-y divide-slate-100 dark:divide-slate-800 max-h-56 overflow-y-auto"
@@ -821,12 +1186,8 @@ watch(() => props.branches, () => {
                                     @click="selectSearchResult(item)"
                                     class="p-2 hover:bg-blue-50 dark:hover:bg-blue-900/30 cursor-pointer transition flex items-start gap-2"
                                 >
-                                    <div :class="[
-                                        'w-5 h-5 rounded-md flex items-center justify-center shrink-0 mt-0.5',
-                                        item.isCoordinate ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400' : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
-                                    ]">
-                                        <Crosshair v-if="item.isCoordinate" class="w-3 h-3" />
-                                        <MapPin v-else class="w-3 h-3" />
+                                    <div class="w-5 h-5 rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 mt-0.5">
+                                        <MapPin class="w-3 h-3" />
                                     </div>
                                     <div class="min-w-0 flex-1">
                                         <p class="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">{{ item.title }}</p>
@@ -843,10 +1204,10 @@ watch(() => props.branches, () => {
         </div>
 
         <!-- ========================================================= -->
-        <!-- VIEW 2: DEDICATED FULL EDIT & DRAW VIEW                   -->
+        <!-- VIEW 2: DEDICATED FULL-SCREEN MAP & GEOFENCE EDITOR       -->
         <!-- ========================================================= -->
-        <div v-else-if="currentView === 'editor'" class="space-y-4">
-            <!-- Header Bar -->
+        <div v-else class="space-y-4">
+            <!-- Top Action Header -->
             <div class="flex items-center justify-between bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs">
                 <div class="flex items-center gap-3">
                     <button
@@ -857,14 +1218,22 @@ watch(() => props.branches, () => {
                         Back to Visualizer
                     </button>
                     <div>
-                        <h3 class="text-sm font-bold text-slate-900 dark:text-white">
-                            {{ isEditing ? `Editing: ${form.name}` : 'Create New Branch' }}
+                        <h3 class="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                            <span>{{ isEditing ? `Editing Branch: ${form.name}` : 'Create New Branch' }}</span>
+                            <span v-if="editingTarget === 'checkpoint'" class="px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 text-[10px] font-bold">
+                                🟡 Checkpoint Mode Active
+                            </span>
                         </h3>
-                        <p class="text-[11px] text-slate-500 dark:text-slate-400">Use the interactive map on the right to freely draw polygon shapes or drag the center pin.</p>
+                        <p class="text-[11px] text-slate-500 dark:text-slate-400">
+                            {{ editingTarget === 'checkpoint'
+                                ? 'Configuring checkpoint boundary (Circle / Polygon) directly on the interactive map.'
+                                : 'Configure the primary branch geofence boundary or select a checkpoint below.'
+                            }}
+                        </p>
                     </div>
                 </div>
 
-                <div class="flex items-center gap-3">
+                <div class="flex items-center gap-2">
                     <button
                         type="button"
                         @click="backToVisualizer"
@@ -873,12 +1242,13 @@ watch(() => props.branches, () => {
                         Cancel
                     </button>
                     <button
+                        v-if="editingTarget === 'branch'"
                         type="button"
                         @click="saveBranch"
                         class="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-lg shadow-blue-600/20 transition flex items-center gap-1.5"
                     >
                         <CheckCircle2 class="w-4 h-4" />
-                        {{ isEditing ? 'Save Changes' : 'Create Branch' }}
+                        {{ isEditing ? 'Save Branch' : 'Create Branch' }}
                     </button>
                 </div>
             </div>
@@ -887,257 +1257,494 @@ watch(() => props.branches, () => {
             <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 h-[calc(100vh-210px)] min-h-[580px]">
                 <!-- Left: Form Controls (5 Cols) -->
                 <div class="lg:col-span-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 overflow-y-auto space-y-4 shadow-xl sidebar-scroll">
-                    <!-- Branch Name -->
-                    <div>
-                        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Branch Name</label>
-                        <input
-                            v-model="form.name"
-                            type="text"
-                            required
-                            placeholder="e.g. HRM Surabaya HQ"
-                            class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm text-slate-900 dark:text-slate-200 focus:outline-none focus:border-blue-500"
-                        />
-                    </div>
 
-                    <!-- Branch Operating Hours (Shift Schedule) -->
-                    <div>
-                        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                            Branch Operating Schedule
-                            <span class="text-slate-400 font-normal text-[11px]">(Working hours &amp; Lateness rule)</span>
-                        </label>
-                        <select
-                            v-model="form.shift_schedule_id"
-                            class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-900 dark:text-slate-200 focus:outline-none focus:border-blue-500"
-                        >
-                            <option :value="null">Default Schedule (08:00 - 17:00, 15m Grace)</option>
-                            <option v-for="sh in shifts" :key="sh.id" :value="sh.id">
-                                {{ sh.name }} ({{ sh.start_time }} - {{ sh.end_time }}, Grace: {{ sh.grace_minutes }}m)
-                            </option>
-                        </select>
-                    </div>
-
-                    <!-- Geofence Boundary Selector -->
-                    <div>
-                        <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Geofence Boundary Type</label>
-                        <div class="grid grid-cols-2 gap-2 p-1 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl">
-                            <button
-                                type="button"
-                                @click="switchGeofenceType('circle')"
-                                :class="[
-                                    'py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5',
-                                    form.geofence_type === 'circle'
-                                        ? 'bg-blue-600 text-white shadow-md'
-                                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                                ]"
-                            >
-                                ⭕ Circular Radius
-                            </button>
-                            <button
-                                type="button"
-                                @click="switchGeofenceType('polygon')"
-                                :class="[
-                                    'py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5',
-                                    form.geofence_type === 'polygon'
-                                        ? 'bg-emerald-600 text-white shadow-md'
-                                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                                ]"
-                            >
-                                ⬡ Polygon (Free Draw)
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- Smart GPS / DMS Paste Helper -->
-                    <div class="p-3.5 bg-blue-50/70 dark:bg-slate-950/80 border border-blue-200/80 dark:border-blue-900/40 rounded-xl space-y-2">
-                        <div class="flex items-center justify-between text-xs">
-                            <label class="font-bold text-blue-900 dark:text-blue-300 flex items-center gap-1.5">
-                                <Crosshair class="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-                                Smart Coordinate / DMS Paste
-                            </label>
-                            <span class="text-[10px] text-slate-400">DMS or Decimal</span>
-                        </div>
-                        <div class="flex gap-2">
+                    <!-- ========================================================= -->
+                    <!-- PANEL A: EDITING MAIN BRANCH PERIMETER                    -->
+                    <!-- ========================================================= -->
+                    <template v-if="editingTarget === 'branch'">
+                        <!-- Branch Name -->
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Branch Name</label>
                             <input
-                                v-model="pasteCoordinateInput"
-                                @keydown.enter.prevent="applyPastedCoordinates"
+                                v-model="form.name"
                                 type="text"
-                                placeholder="Paste e.g. 2°38'04.5&quot;S 121°06'27.0&quot;E or -2.634581, 121.107485"
-                                class="flex-1 px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-mono text-slate-900 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-blue-500"
+                                required
+                                placeholder="e.g. HRM Surabaya HQ"
+                                class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm text-slate-900 dark:text-slate-200 focus:outline-none focus:border-blue-500"
                             />
-                            <button
-                                type="button"
-                                @click="applyPastedCoordinates"
-                                :disabled="!pasteCoordinateInput"
-                                class="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition disabled:opacity-40 flex items-center gap-1 shadow-xs"
-                                title="Parse and apply to Latitude / Longitude"
+                        </div>
+
+                        <!-- Branch Operating Hours (Shift Schedule) -->
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                Branch Operating Schedule
+                                <span class="text-slate-400 font-normal text-[11px]">(Working hours &amp; Lateness rule)</span>
+                            </label>
+                            <select
+                                v-model="form.shift_schedule_id"
+                                class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-900 dark:text-slate-200 focus:outline-none focus:border-blue-500"
                             >
-                                <ClipboardPaste class="w-3.5 h-3.5" />
-                                Apply
-                            </button>
+                                <option :value="null">Default Schedule (08:00 - 17:00, 15m Grace)</option>
+                                <option v-for="sh in shifts" :key="sh.id" :value="sh.id">
+                                    {{ sh.name }} ({{ sh.start_time }} - {{ sh.end_time }}, Grace: {{ sh.grace_minutes }}m)
+                                </option>
+                            </select>
                         </div>
-                    </div>
 
-                    <!-- Coordinates & Radius -->
-                    <div class="grid grid-cols-2 gap-3">
+                        <!-- Geofence Boundary Selector -->
                         <div>
-                            <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Latitude</label>
-                            <input
-                                v-model.number="form.latitude"
-                                @input="onCoordinateChange"
-                                @change="onCoordinateChange"
-                                type="number"
-                                step="any"
-                                required
-                                class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-mono text-slate-900 dark:text-slate-200 focus:outline-none focus:border-blue-500"
-                            />
-                        </div>
-                        <div>
-                            <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Longitude</label>
-                            <input
-                                v-model.number="form.longitude"
-                                @input="onCoordinateChange"
-                                @change="onCoordinateChange"
-                                type="number"
-                                step="any"
-                                required
-                                class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-mono text-slate-900 dark:text-slate-200 focus:outline-none focus:border-blue-500"
-                            />
-                        </div>
-                        <div class="col-span-2">
-                            <div class="flex items-center justify-between mb-1">
-                                <label class="text-xs font-semibold text-slate-700 dark:text-slate-300">Allowed Radius (Meters)</label>
-                                <span class="text-xs font-mono font-bold text-blue-600 dark:text-blue-400">{{ form.radius_meters }} m</span>
-                            </div>
-                            <div class="flex items-center gap-3">
-                                <input
-                                    v-model.number="form.radius_meters"
-                                    @input="updateEditorOverlays"
-                                    type="range"
-                                    min="10"
-                                    max="500"
-                                    step="5"
-                                    class="w-full h-2 bg-slate-200 dark:bg-slate-950 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                                />
-                                <input
-                                    v-model.number="form.radius_meters"
-                                    @input="updateEditorOverlays"
-                                    type="number"
-                                    min="5"
-                                    class="w-20 px-2 py-1 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs text-slate-900 dark:text-slate-200 font-mono text-right"
-                                />
+                            <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Primary Geofence Boundary Type</label>
+                            <div class="grid grid-cols-2 gap-2 p-1 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl">
+                                <button
+                                    type="button"
+                                    @click="switchGeofenceType('circle')"
+                                    :class="[
+                                        'py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5',
+                                        form.geofence_type === 'circle'
+                                            ? 'bg-blue-600 text-white shadow-md'
+                                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                                    ]"
+                                >
+                                    ⭕ Circular Radius
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="switchGeofenceType('polygon')"
+                                    :class="[
+                                        'py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5',
+                                        form.geofence_type === 'polygon'
+                                            ? 'bg-emerald-600 text-white shadow-md'
+                                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                                    ]"
+                                >
+                                    ⬡ Polygon (Free Draw)
+                                </button>
                             </div>
                         </div>
-                    </div>
 
-                    <!-- Polygon Tool Actions -->
-                    <div v-if="form.geofence_type === 'polygon'" class="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-emerald-500/30 space-y-3">
-                        <div class="flex items-center justify-between">
-                            <span class="text-xs font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
-                                <PenTool class="w-4 h-4" />
-                                Polygon Free-Draw Tools
-                            </span>
+                        <!-- Smart GPS / DMS Paste Helper -->
+                        <div class="p-3.5 bg-blue-50/70 dark:bg-slate-950/80 border border-blue-200/80 dark:border-blue-900/40 rounded-xl space-y-2">
+                            <div class="flex items-center justify-between text-xs">
+                                <label class="font-bold text-blue-900 dark:text-blue-300 flex items-center gap-1.5">
+                                    <Crosshair class="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                                    Smart Coordinate / DMS Paste
+                                </label>
+                                <span class="text-[10px] text-slate-400">DMS or Decimal</span>
+                            </div>
                             <div class="flex gap-2">
-                                <button
-                                    type="button"
-                                    @click="startDrawPolygonTool"
-                                    class="px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-500 transition shadow-sm"
-                                >
-                                    🖌️ Draw on Map
-                                </button>
-                                <button
-                                    type="button"
-                                    @click="clearPolygonTool"
-                                    class="px-2.5 py-1 rounded-lg bg-rose-600/10 text-rose-600 dark:text-rose-400 border border-rose-500/30 text-xs font-semibold hover:bg-rose-600/20"
-                                >
-                                    Clear
-                                </button>
-                            </div>
-                        </div>
-
-                        <p class="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
-                            Click <b>'Draw on Map'</b>, click multi-points on the map to construct the geofenced perimeter, and double-click to finish closing the shape. You can also drag the vertex points to adjust borders!
-                        </p>
-
-                        <textarea
-                            v-model="form.polygon_coordinates"
-                            rows="2"
-                            placeholder="[[lat, lng], [lat, lng], [lat, lng]]"
-                            class="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-[11px] font-mono text-slate-800 dark:text-slate-300 focus:outline-none focus:border-emerald-500"
-                        ></textarea>
-                    </div>
-
-                    <!-- Checkpoints Manager (When Editing) -->
-                    <div v-if="isEditing && selectedBranch" class="pt-3 border-t border-slate-200 dark:border-slate-800">
-                        <h4 class="text-xs font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400 mb-2 flex items-center gap-1.5">
-                            <MapPin class="w-4 h-4" />
-                            Multipoint Checkpoints ({{ selectedBranch.checkpoints?.length || 0 }})
-                        </h4>
-
-                        <div class="space-y-2 mb-3">
-                            <div
-                                v-for="cp in selectedBranch.checkpoints"
-                                :key="cp.id"
-                                class="flex items-center justify-between p-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs"
-                            >
-                                <div>
-                                    <span class="font-bold text-slate-900 dark:text-white">{{ cp.name }}</span>
-                                    <span class="text-slate-500 ml-2 font-mono text-[11px]">({{ cp.latitude.toFixed(4) }}, {{ cp.longitude.toFixed(4) }} • {{ cp.radius_meters }}m)</span>
-                                </div>
-                                <button
-                                    type="button"
-                                    @click="deleteCheckpoint(cp.id)"
-                                    class="p-1 rounded-lg text-slate-400 hover:text-rose-500"
-                                >
-                                    <Trash2 class="w-3.5 h-3.5" />
-                                </button>
-                            </div>
-                            <div v-if="selectedBranch.checkpoints?.length === 0" class="text-xs text-slate-500 text-center py-2">
-                                No secondary checkpoints added yet.
-                            </div>
-                        </div>
-
-                        <!-- Add Checkpoint Inline Form -->
-                        <div class="grid grid-cols-1 sm:grid-cols-4 gap-2 bg-slate-50 dark:bg-slate-950 p-2.5 rounded-xl border border-slate-200 dark:border-slate-800">
-                            <div class="sm:col-span-2">
                                 <input
-                                    v-model="checkpointForm.name"
+                                    v-model="pasteCoordinateInput"
+                                    @keydown.enter.prevent="applyPastedCoordinates"
                                     type="text"
-                                    placeholder="Point Name (e.g. Gate 2)"
-                                    class="w-full px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs text-slate-900 dark:text-slate-200"
+                                    placeholder="Paste e.g. 2°38'04.5&quot;S 121°06'27.0&quot;E or -2.634581, 121.107485"
+                                    class="flex-1 px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-mono text-slate-900 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-blue-500"
+                                />
+                                <button
+                                    type="button"
+                                    @click="applyPastedCoordinates"
+                                    :disabled="!pasteCoordinateInput"
+                                    class="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition disabled:opacity-40 flex items-center gap-1 shadow-xs"
+                                >
+                                    <ClipboardPaste class="w-3.5 h-3.5" />
+                                    Apply
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Coordinates & Radius -->
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Latitude</label>
+                                <input
+                                    v-model.number="form.latitude"
+                                    @input="onCoordinateChange"
+                                    @change="onCoordinateChange"
+                                    type="number"
+                                    step="any"
+                                    required
+                                    class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-mono text-slate-900 dark:text-slate-200 focus:outline-none focus:border-blue-500"
                                 />
                             </div>
                             <div>
+                                <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Longitude</label>
                                 <input
-                                    v-model.number="checkpointForm.radius_meters"
+                                    v-model.number="form.longitude"
+                                    @input="onCoordinateChange"
+                                    @change="onCoordinateChange"
                                     type="number"
-                                    placeholder="Radius (m)"
-                                    class="w-full px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs text-slate-900 dark:text-slate-200"
+                                    step="any"
+                                    required
+                                    class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-mono text-slate-900 dark:text-slate-200 focus:outline-none focus:border-blue-500"
                                 />
                             </div>
+
+                            <div v-if="form.geofence_type === 'circle'" class="col-span-2">
+                                <div class="flex items-center justify-between mb-1">
+                                    <label class="text-xs font-semibold text-slate-700 dark:text-slate-300">Allowed Radius (Meters)</label>
+                                    <span class="text-xs font-mono font-bold text-blue-600 dark:text-blue-400">{{ form.radius_meters }} m</span>
+                                </div>
+                                <div class="flex items-center gap-3">
+                                    <input
+                                        v-model.number="form.radius_meters"
+                                        @input="updateEditorOverlays"
+                                        type="range"
+                                        min="10"
+                                        max="500"
+                                        step="5"
+                                        class="w-full h-2 bg-slate-200 dark:bg-slate-950 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                                    />
+                                    <input
+                                        v-model.number="form.radius_meters"
+                                        @input="updateEditorOverlays"
+                                        type="number"
+                                        min="5"
+                                        class="w-20 px-2 py-1 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs text-slate-900 dark:text-slate-200 font-mono text-right"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Polygon Tool Actions -->
+                        <div v-if="form.geofence_type === 'polygon'" class="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-emerald-500/30 space-y-3">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                                    <PenTool class="w-4 h-4" />
+                                    Polygon Free-Draw Tools
+                                </span>
+                                <div class="flex gap-2">
+                                    <button
+                                        type="button"
+                                        @click="startDrawPolygonTool"
+                                        class="px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-500 transition shadow-sm"
+                                    >
+                                        🖌️ Draw on Map
+                                    </button>
+                                    <button
+                                        type="button"
+                                        @click="clearPolygonTool"
+                                        class="px-2.5 py-1 rounded-lg bg-rose-600/10 text-rose-600 dark:text-rose-400 border border-rose-500/30 text-xs font-semibold hover:bg-rose-600/20"
+                                    >
+                                        Clear
+                                    </button>
+                                </div>
+                            </div>
+
+                            <p class="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
+                                Click <b>'Draw on Map'</b>, click multi-points on the map to construct the geofenced perimeter, and double-click to finish closing the shape. You can drag the vertex points to adjust borders!
+                            </p>
+
+                            <textarea
+                                v-model="form.polygon_coordinates"
+                                rows="2"
+                                placeholder="[[lat, lng], [lat, lng], [lat, lng]]"
+                                class="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-[11px] font-mono text-slate-800 dark:text-slate-300 focus:outline-none focus:border-emerald-500"
+                            ></textarea>
+                        </div>
+
+                        <!-- Checkpoints Manager (When Branch is saved/editing) -->
+                        <div v-if="isEditing && selectedBranch" class="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-3">
+                            <div class="flex items-center justify-between">
+                                <h4 class="text-xs font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
+                                    <MapPin class="w-4 h-4" />
+                                    Multipoint Checkpoints ({{ selectedBranch.checkpoints?.length || 0 }})
+                                </h4>
+
+                                <button
+                                    type="button"
+                                    @click="startAddCheckpoint"
+                                    class="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold transition flex items-center gap-1 shadow-sm"
+                                >
+                                    <Plus class="w-3.5 h-3.5" />
+                                    Add Checkpoint
+                                </button>
+                            </div>
+
+                            <div class="space-y-2">
+                                <div
+                                    v-for="cp in selectedBranch.checkpoints"
+                                    :key="cp.id"
+                                    class="p-3 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl flex items-center justify-between hover:border-amber-500/50 transition group"
+                                >
+                                    <div class="min-w-0 flex-1 pr-2">
+                                        <div class="flex items-center gap-2">
+                                            <span class="font-bold text-xs text-slate-900 dark:text-white truncate">{{ cp.name }}</span>
+                                            <span :class="[
+                                                'px-1.5 py-0.5 rounded text-[10px] font-bold font-mono shrink-0',
+                                                cp.geofence_type === 'polygon'
+                                                    ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                                                    : 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20'
+                                            ]">
+                                                {{ cp.geofence_type === 'polygon' ? '⬡ Polygon' : `⭕ ${cp.radius_meters}m` }}
+                                            </span>
+                                        </div>
+                                        <p class="text-[11px] text-slate-500 font-mono mt-0.5">
+                                            GPS: {{ cp.latitude.toFixed(5) }}, {{ cp.longitude.toFixed(5) }}
+                                        </p>
+                                    </div>
+
+                                    <div class="flex items-center gap-1 shrink-0">
+                                        <button
+                                            type="button"
+                                            @click="startEditCheckpoint(cp)"
+                                            class="p-1.5 rounded-lg text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/50 transition"
+                                            title="Edit Checkpoint on Map"
+                                        >
+                                            <Edit2 class="w-3.5 h-3.5" />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            @click="deleteCheckpoint(cp.id)"
+                                            class="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/50 transition"
+                                            title="Delete Checkpoint"
+                                        >
+                                            <Trash2 class="w-3.5 h-3.5" />
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div v-if="!selectedBranch.checkpoints || selectedBranch.checkpoints.length === 0" class="text-xs text-slate-500 text-center py-4 bg-slate-50/50 dark:bg-slate-950/50 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
+                                    No secondary checkpoints added yet. Click <b>'+ Add Checkpoint'</b> to configure multiple check-in gates/areas with circle radius or polygon boundaries.
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- ========================================================= -->
+                    <!-- PANEL B: DEDICATED CHECKPOINT CONFIGURATION               -->
+                    <!-- ========================================================= -->
+                    <template v-else-if="editingTarget === 'checkpoint'">
+                        <!-- Checkpoint Sub-Header -->
+                        <div class="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-center justify-between">
+                            <div class="flex items-center gap-2">
+                                <div class="w-7 h-7 rounded-lg bg-amber-500 text-slate-950 flex items-center justify-center font-bold text-xs">
+                                    🟡
+                                </div>
+                                <div>
+                                    <h4 class="text-xs font-bold text-amber-900 dark:text-amber-300">
+                                        {{ editingCheckpoint ? `Edit Checkpoint: ${checkpointForm.name || 'Unnamed'}` : `New Checkpoint for ${selectedBranch?.name}` }}
+                                    </h4>
+                                    <p class="text-[10px] text-amber-700/80 dark:text-amber-400/80">Configure boundaries matching main branch options.</p>
+                                </div>
+                            </div>
+
                             <button
                                 type="button"
-                                @click="addCheckpoint"
-                                :disabled="!checkpointForm.name"
-                                class="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-bold transition disabled:opacity-50"
+                                @click="exitCheckpointMode"
+                                class="text-xs font-semibold text-amber-800 dark:text-amber-300 hover:underline flex items-center gap-1"
                             >
-                                + Add Point
+                                <ArrowLeft class="w-3 h-3" />
+                                Return to Branch
                             </button>
                         </div>
-                    </div>
+
+                        <!-- Checkpoint Name & Active Status -->
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Checkpoint Name / Label</label>
+                            <input
+                                v-model="checkpointForm.name"
+                                type="text"
+                                required
+                                placeholder="e.g. Gate 2 - Logistics Loading Dock"
+                                class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm text-slate-900 dark:text-slate-200 focus:outline-none focus:border-amber-500"
+                            />
+                        </div>
+
+                        <!-- Checkpoint Geofence Boundary Selector (Circle vs Polygon) -->
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Checkpoint Boundary Type</label>
+                            <div class="grid grid-cols-2 gap-2 p-1 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl">
+                                <button
+                                    type="button"
+                                    @click="switchGeofenceType('circle')"
+                                    :class="[
+                                        'py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5',
+                                        checkpointForm.geofence_type === 'circle'
+                                            ? 'bg-amber-500 text-slate-950 font-bold shadow-md'
+                                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                                    ]"
+                                >
+                                    ⭕ Circular Radius
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="switchGeofenceType('polygon')"
+                                    :class="[
+                                        'py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5',
+                                        checkpointForm.geofence_type === 'polygon'
+                                            ? 'bg-amber-500 text-slate-950 font-bold shadow-md'
+                                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                                    ]"
+                                >
+                                    ⬡ Polygon (Free Draw)
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Smart GPS / DMS Paste for Checkpoint -->
+                        <div class="p-3.5 bg-amber-500/10 dark:bg-slate-950/80 border border-amber-500/30 rounded-xl space-y-2">
+                            <div class="flex items-center justify-between text-xs">
+                                <label class="font-bold text-amber-900 dark:text-amber-300 flex items-center gap-1.5">
+                                    <Crosshair class="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                                    Smart Checkpoint Coordinate Paste
+                                </label>
+                                <span class="text-[10px] text-slate-400">DMS or Decimal</span>
+                            </div>
+                            <div class="flex gap-2">
+                                <input
+                                    v-model="pasteCoordinateInput"
+                                    @keydown.enter.prevent="applyPastedCoordinates"
+                                    type="text"
+                                    placeholder="Paste e.g. 2°38'04.5&quot;S 121°06'27.0&quot;E or -2.634581, 121.107485"
+                                    class="flex-1 px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-mono text-slate-900 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-amber-500"
+                                />
+                                <button
+                                    type="button"
+                                    @click="applyPastedCoordinates"
+                                    :disabled="!pasteCoordinateInput"
+                                    class="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold transition disabled:opacity-40 flex items-center gap-1 shadow-xs"
+                                >
+                                    <ClipboardPaste class="w-3.5 h-3.5" />
+                                    Apply
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Coordinates & Radius Inputs -->
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Latitude</label>
+                                <input
+                                    v-model.number="checkpointForm.latitude"
+                                    @input="onCoordinateChange"
+                                    @change="onCoordinateChange"
+                                    type="number"
+                                    step="any"
+                                    required
+                                    class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-mono text-slate-900 dark:text-slate-200 focus:outline-none focus:border-amber-500"
+                                />
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Longitude</label>
+                                <input
+                                    v-model.number="checkpointForm.longitude"
+                                    @input="onCoordinateChange"
+                                    @change="onCoordinateChange"
+                                    type="number"
+                                    step="any"
+                                    required
+                                    class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-mono text-slate-900 dark:text-slate-200 focus:outline-none focus:border-amber-500"
+                                />
+                            </div>
+
+                            <div v-if="checkpointForm.geofence_type === 'circle'" class="col-span-2">
+                                <div class="flex items-center justify-between mb-1">
+                                    <label class="text-xs font-semibold text-slate-700 dark:text-slate-300">Allowed Checkpoint Radius (Meters)</label>
+                                    <span class="text-xs font-mono font-bold text-amber-600 dark:text-amber-400">{{ checkpointForm.radius_meters }} m</span>
+                                </div>
+                                <div class="flex items-center gap-3">
+                                    <input
+                                        v-model.number="checkpointForm.radius_meters"
+                                        @input="updateEditorOverlays"
+                                        type="range"
+                                        min="5"
+                                        max="300"
+                                        step="5"
+                                        class="w-full h-2 bg-slate-200 dark:bg-slate-950 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                                    />
+                                    <input
+                                        v-model.number="checkpointForm.radius_meters"
+                                        @input="updateEditorOverlays"
+                                        type="number"
+                                        min="5"
+                                        class="w-20 px-2 py-1 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs text-slate-900 dark:text-slate-200 font-mono text-right"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Checkpoint Polygon Free-Draw Tools -->
+                        <div v-if="checkpointForm.geofence_type === 'polygon'" class="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-amber-500/30 space-y-3">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-bold text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
+                                    <PenTool class="w-4 h-4" />
+                                    Checkpoint Polygon Free-Draw
+                                </span>
+                                <div class="flex gap-2">
+                                    <button
+                                        type="button"
+                                        @click="startDrawPolygonTool"
+                                        class="px-2.5 py-1 rounded-lg bg-amber-500 text-slate-950 text-xs font-bold hover:bg-amber-600 transition shadow-sm"
+                                    >
+                                        🖌️ Draw on Map
+                                    </button>
+                                    <button
+                                        type="button"
+                                        @click="clearPolygonTool"
+                                        class="px-2.5 py-1 rounded-lg bg-rose-600/10 text-rose-600 dark:text-rose-400 border border-rose-500/30 text-xs font-semibold hover:bg-rose-600/20"
+                                    >
+                                        Clear
+                                    </button>
+                                </div>
+                            </div>
+
+                            <p class="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
+                                Click <b>'Draw on Map'</b>, click multi-points to create the specific checkpoint boundary, and double-click to close. Drag vertex points anytime to fine-tune!
+                            </p>
+
+                            <textarea
+                                v-model="checkpointForm.polygon_coordinates"
+                                rows="2"
+                                placeholder="[[lat, lng], [lat, lng], [lat, lng]]"
+                                class="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-[11px] font-mono text-slate-800 dark:text-slate-300 focus:outline-none focus:border-amber-500"
+                            ></textarea>
+                        </div>
+
+                        <!-- Checkpoint Actions Footer -->
+                        <div class="pt-3 border-t border-slate-200 dark:border-slate-800 flex items-center gap-2">
+                            <button
+                                type="button"
+                                @click="exitCheckpointMode"
+                                class="flex-1 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold transition"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                @click="saveCheckpoint"
+                                :disabled="isSavingCheckpoint || !checkpointForm.name"
+                                class="flex-1 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-lg shadow-amber-500/20 disabled:opacity-50"
+                            >
+                                <Check class="w-4 h-4" />
+                                {{ editingCheckpoint ? 'Update Checkpoint' : 'Save Checkpoint' }}
+                            </button>
+                        </div>
+                    </template>
                 </div>
 
                 <!-- Right: Dedicated Interactive Drawing Map (7 Cols) -->
                 <div class="lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-xl relative flex flex-col">
                     <!-- Status Badge -->
                     <div class="absolute top-4 right-4 z-20 flex items-center gap-2 bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 backdrop-blur-md px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-800 dark:text-slate-200 shadow-lg">
-                        <span v-if="form.geofence_type === 'polygon'" class="text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
-                            <PenTool class="w-3.5 h-3.5" />
-                            Polygon Free-Draw Active
-                        </span>
-                        <span v-else class="text-blue-600 dark:text-blue-400 flex items-center gap-1.5">
-                            <Compass class="w-3.5 h-3.5" />
-                            Click Map or Drag Pin to Set Center
-                        </span>
+                        <template v-if="editingTarget === 'branch'">
+                            <span v-if="form.geofence_type === 'polygon'" class="text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                                <PenTool class="w-3.5 h-3.5" />
+                                Branch Polygon Active
+                            </span>
+                            <span v-else class="text-blue-600 dark:text-blue-400 flex items-center gap-1.5">
+                                <Compass class="w-3.5 h-3.5" />
+                                Branch Center Pin
+                            </span>
+                        </template>
+                        <template v-else>
+                            <span v-if="checkpointForm.geofence_type === 'polygon'" class="text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
+                                <PenTool class="w-3.5 h-3.5" />
+                                Checkpoint Polygon Free-Draw Active
+                            </span>
+                            <span v-else class="text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
+                                <CircleDot class="w-3.5 h-3.5" />
+                                Checkpoint Circle Active
+                            </span>
+                        </template>
                     </div>
 
                     <!-- Editor Map Location Search Bar -->
@@ -1150,7 +1757,7 @@ watch(() => props.branches, () => {
                                     @input="onSearchInput"
                                     @focus="if (searchResults.length > 0) showSearchResults = true;"
                                     type="text"
-                                    placeholder="Search place (e.g. Malili) or paste GPS..."
+                                    :placeholder="editingTarget === 'checkpoint' ? 'Search checkpoint GPS/place...' : 'Search place or paste GPS...'"
                                     class="w-full pl-8 pr-7 py-1.5 bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 backdrop-blur-md rounded-xl text-xs text-slate-900 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-lg"
                                 />
                                 <button

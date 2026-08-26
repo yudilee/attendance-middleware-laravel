@@ -125,6 +125,23 @@ class BranchController extends Controller
         return back()->with('success', 'Checkpoint added to branch.');
     }
 
+    public function updateCheckpoint(Request $request, BranchCheckpoint $checkpoint)
+    {
+        $validated = $request->validate([
+            'name' => 'required|string|max:150',
+            'latitude' => 'required|numeric',
+            'longitude' => 'required|numeric',
+            'radius_meters' => 'required|numeric|min:5',
+            'geofence_type' => 'required|in:circle,polygon',
+            'polygon_coordinates' => 'nullable|string',
+            'is_active' => 'boolean',
+        ]);
+
+        $checkpoint->update($validated);
+
+        return back()->with('success', 'Checkpoint updated successfully.');
+    }
+
     public function destroyCheckpoint(BranchCheckpoint $checkpoint)
     {
         $checkpoint->delete();
