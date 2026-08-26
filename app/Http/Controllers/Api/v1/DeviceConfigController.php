@@ -23,7 +23,14 @@ class DeviceConfigController extends Controller
         }
 
         // Look for binding
-        $query = DeviceBinding::with(['branches.checkpoints', 'employee.shiftSchedule', 'employee.group.shiftSchedule', 'employee.company.shiftSchedule']);
+        $query = DeviceBinding::with([
+            'branches.checkpoints',
+            'branches.shiftSchedule',
+            'employee.shiftSchedule',
+            'employee.group.shiftSchedule',
+            'employee.group.branch.shiftSchedule',
+            'employee.company.shiftSchedule'
+        ]);
 
         if ($deviceUuid && $employeeId) {
             $binding = (clone $query)->where('device_uuid', $deviceUuid)->where('employee_id', $employeeId)->first();
@@ -67,17 +74,19 @@ class DeviceConfigController extends Controller
 
         // Fallback: If no branches assigned specifically to this binding, provide all active branches or employee branch
         if ($branches->isEmpty()) {
-            $branches = Branch::where('is_active', true)->with('checkpoints')->get();
+            $branches = Branch::where('is_active', true)->with(['checkpoints', 'shiftSchedule'])->get();
         }
 
         // Resolve Shift Schedule: Employee -> Group -> Branch -> Company Default -> Global Default
         $shiftSchedule = $employee?->shiftSchedule
             ?? $employee?->group?->shiftSchedule
+            ?? $employee?->group?->branch?->shiftSchedule
             ?? $employee?->company?->shiftSchedule
             ?? ShiftSchedule::where('is_default', true)->first()
             ?? ShiftSchedule::first();
 
         $branchesData = $branches->map(function ($b) {
+            $bShift = $b->shiftSchedule;
             return [
                 'id' => $b->id,
                 'name' => $b->name,
@@ -90,6 +99,12 @@ class DeviceConfigController extends Controller
                 'qr_code_data' => $b->qr_code_data,
                 'nfc_enabled' => $b->nfc_enabled,
                 'nfc_tag_data' => $b->nfc_tag_data,
+                'shift_schedule' => $bShift ? [
+                    'name' => $bShift->name,
+                    'start_time' => $bShift->start_time,
+                    'end_time' => $bShift->end_time,
+                    'grace_minutes' => $bShift->grace_minutes,
+                ] : null,
                 'checkpoints' => $b->checkpoints->where('is_active', true)->map(function ($cp) {
                     return [
                         'id' => $cp->id,
